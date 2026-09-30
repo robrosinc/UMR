@@ -1,0 +1,29 @@
+{
+  "robot": {
+    "name": "igris_c",
+    "xml": "../assets/igris_c/igris_c_v2.xml",
+    "point_cloud_center": "body:Link_Waist_Pitch",
+    "tpose_qpos": {
+      "Joint_Shoulder_Pitch_Left": 0.0,
+      "Joint_Shoulder_Roll_Left": 1.57079632679,
+      "Joint_Shoulder_Yaw_Left": 0.0,
+      "Joint_Elbow_Pitch_Left": 0.0,
+      "Joint_Wrist_Yaw_Left": 0.0,
+      "Joint_Wrist_Roll_Left": 0.0,
+      "Joint_Wrist_Pitch_Left": 0.0,
+      "Joint_Shoulder_Pitch_Right": 0.0,
+      "Joint_Shoulder_Roll_Right": -1.57079632679,
+      "Joint_Shoulder_Yaw_Right": 0.0,
+      "Joint_Elbow_Pitch_Right": 0.0,
+      "Joint_Wrist_Yaw_Right": 0.0,
+      "Joint_Wrist_Roll_Right": 0.0,
+      "Joint_Wrist_Pitch_Right": 0.0
+    },
+    "joint_limits": {
+      "Joint_Knee_Pitch_Left": [0.0, "inf"],
+      "Joint_Knee_Pitch_Right": [0.0, "inf"],
+      "Joint_Elbow_Pitch_Left": ["-inf", 0.0],
+      "Joint_Elbow_Pitch_Right": ["-inf", 0.0]
+    }
+  }
+}
