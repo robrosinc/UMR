@@ -69,7 +69,7 @@ information can be integrated through the same formulation.
 | AdaPT body+racket | [AdaPT](https://humanoidtennis.github.io/AdaPT/) | [`sample_data/adapt/README.md`](sample_data/adapt/README.md) |
 | NR FBX/BVH | FBX/BVH motion | [`sample_data/nr/README.md`](sample_data/nr/README.md) |
 
-> **OmniContact support.** An internal development version of UMR was used to produce the Unitree G1 retargeting data released by [OmniContact](https://omnicontact.github.io/). OmniContact provides the source motions as BVH, while UMR uses SMPL-X inputs. The internal BVH-to-SMPL-X converter is not included in this repository, so the current release does not directly support these BVH files.
+> **OmniContact support.** The public data provides BVH motion, while UMR expects SMPL-X. `scripts/convert_omnicontact_to_umr.py` maps the released BVH skeleton into UMR's flat SMPL-X layout and prepares the object assets. This direct mapping does not reproduce the fitted example's additional upper-body IK; see the [adapter guide](sample_data/omnicontact/README.md).
 
 For LAFAN1, use [`lafan_to_smplx`](https://github.com/jaraujo98/lafan_to_smplx)
 to convert BVH motion to SMPL-X before retargeting. Each adapter guide documents

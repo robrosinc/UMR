@@ -14,6 +14,9 @@ GRAIL does not use an ordinary shaped SMPL-X template. The released
 `g1_smplx_model/` overlay converts the licensed neutral SMPL-X model into the
 GRAIL G1-SMPL-X surface used for correspondence. Keep this overlay intact and
 also place the upstream `SMPLX_NEUTRAL.pkl` at `smpl/SMPLX_NEUTRAL.pkl`.
+The `g1_smplx_model/` directory describes the source motion's human surface;
+it is used even when the target robot is Igris C. The target robot comes from
+the selected robot config's `robot.xml`.
 
 ## UMR layout
 
@@ -42,6 +45,14 @@ sample_data/grail/
 `<subset>` is `slope` in the released example. A directory is recognized as a
 GRAIL root only when both `recon/` and `object_usd/` exist. The recon pickle and
 USD must have identical filename stems.
+
+For a local full-dataset install, place each upstream subset's `recon/` and
+`object_usd/` contents under the matching subset directory. Hard links avoid
+duplicating the large source files when both locations share a filesystem.
+Keep `recon/` files at the UMR path rather than symlinking them: the loader
+resolves a sequence path and uses its parent directory to locate the USD and
+generated `object_mjcf/` assets. Locally imported files are ignored by Git;
+the tracked `slope` example remains in place.
 
 The recon pickle supplies `human_data` with SMPL-X `poses`, `trans`, `betas`,
 `gender`, `model`, and frame rate, plus `obj_data` with per-frame `obj_R`,
@@ -73,3 +84,18 @@ python scripts/humanoid_retarget_pipeline_hsi_hoi.py \
   --data sample_data/grail/<subset> \
   --seq-key <sequence-key>
 ```
+
+## Batch retargeting for Igris C
+
+The batch script fits correspondence once for the shared GRAIL SMPL-X template,
+then retargets each sequence. Object MJCF assets are prepared per sequence as
+needed. Pass the whole GRAIL root or one subset as the first argument and the
+result directory as the second:
+
+```bash
+scripts/humanoid_retarget_pipeline_hsi_hoi_batch_grail_igris_c.sh \
+  sample_data/grail/slope output/igris_c_grail_retarget --limit 10
+```
+
+Use `--plan` to list sequence and template counts without fitting. With no
+arguments, the script selects all subsets under `sample_data/grail`.

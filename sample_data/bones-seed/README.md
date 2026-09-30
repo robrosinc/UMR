@@ -45,6 +45,28 @@ extracted `bvh/` directories into `motions_uniform/` and
 `soma_shapes/` directory into the matching local `shapes/` subdirectories shown
 above.
 
+The converter extracts the uniform archive and links the shape and SOMA-X
+files into this layout. It fetches any missing public SOMA-X runtime files
+from the official model repository through the `hf` CLI:
+
+```bash
+scripts/convert_bones_seed_to_umr.sh \
+  /home/robros/workspace/motion_datas/bones-seed_origin \
+  sample_data/bones-seed
+```
+
+Set `SOMA_ASSETS=/path/to/SOMA-X/assets` to choose another local asset source,
+or pass `--no-download-assets` to require a fully local conversion. The Python
+entry point is `scripts/convert_bones_seed_to_umr.py` with `--input`, `--output`,
+and `--soma-assets` arguments. The old `prepare_bones_seed_data.py` entry point
+remains an alias.
+
+The converter records a successful extraction in
+`motions_uniform/.umr_extraction.json` and reuses it on later runs.
+The proportional shape files are placed even when the proportional motion
+archive is unavailable. The current local download contains only
+`soma_uniform.tar.gz`; proportional motions require the separate archive.
+
 All uniform sequences share `soma_base_fit_mhr_params.npz`. For proportional
 motion, the actor ID embedded in the BVH name, such as `A304`, selects the
 matching `soma_proportion_fit_mhr_params/A304.npz` file. The filename must
@@ -127,7 +149,21 @@ Before scanning the proportional BVHs, UMR pre-registers every `Axxx.npz` under
 `shapes/soma_proportion_fit_mhr_params/`. A filename such as
 `<motion>__A304_M.bvh` is then matched directly to the `soma_A304` template.
 Missing actor IDs or unmatched shape files raise a clear error instead of
-silently falling back to a generic SOMA body. The default 48 retarget workers and 8
-correspondence workers mirror the large-scale configuration; override
-`--workers` and `--correspondence-workers` when local CPU/GPU capacity is
-smaller.
+silently falling back to a generic SOMA body. The batch defaults use 20 retarget
+workers and 8 correspondence workers; override `--workers` and
+`--correspondence-workers` when local CPU/GPU capacity is smaller.
+
+For IGRIS C, run the dedicated wrapper. It selects `igris_c_v2.xml`, uses the
+waist pitch link as the robot point-cloud center, and defaults to four retarget
+workers and one correspondence worker:
+
+```bash
+scripts/humanoid_retarget_pipeline_batch_bones_seed_igris_c.sh \
+  sample_data/bones-seed/motions_uniform/bvh \
+  output/bones_seed_igris_c_retarget \
+  --limit 10
+```
+
+Results are written under `output/bones_seed_igris_c_retarget/igris_c/`.
+`--dry-run` checks discovery and planned work. The correspondence template is
+shared by every uniform motion, so mesh fitting runs once for this subset.
