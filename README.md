@@ -34,6 +34,7 @@
 <p align="center">
   <a href="https://hanyang9.github.io/UMR/"><img src="https://img.shields.io/badge/Project-Page-2ea44f" alt="Project Page"></a>
   <a href="https://arxiv.org/abs/2609.02134"><img src="https://img.shields.io/badge/arXiv-2609.02134-b31b1b" alt="arXiv"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
 </p>
 
 ---
@@ -53,6 +54,13 @@ motion and humanoid robots. It has two main stages:
 A learned correspondence is reused by motions with the same source template
 and target robot.
 
+## News & Updates
+
+- **September 2026:** Added support for the
+  [HiPHI dataset](https://noitom-robotics.github.io/hiphi). Visit
+  [hiphi2smplx](https://github.com/noitom-robotics/hiphi2smplx) to convert
+  HiPHI BVH motions to SMPL-X.
+
 ## Supported Motion Sources
 
 UMR samples the moving exterior surface, so any source with surface-level motion
@@ -61,6 +69,7 @@ information can be integrated through the same formulation.
 | Motion source | Dataset | Adapter guide |
 | --- | --- | --- |
 | BONES-SEED / SOMA | [BONES-SEED](https://huggingface.co/datasets/bones-studio/seed) | [`sample_data/bones-seed/README.md`](sample_data/bones-seed/README.md) |
+| HiPHI / SMPL-X | [HiPHI](https://noitom-robotics.github.io/hiphi) | [`sample_data/hiphi/README.md`](sample_data/hiphi/README.md) |
 | GRAIL | [NVIDIA GRAIL](https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-Locomanipulation-GRAIL) | [`sample_data/grail/README.md`](sample_data/grail/README.md) |
 | OmniContact | [Paper and dataset](https://huggingface.co/papers/2606.26201) | [`sample_data/omnicontact/README.md`](sample_data/omnicontact/README.md) |
 | LAFAN1 / SMPL-X | [LAFAN1](https://github.com/ubisoft/ubisoft-laforge-animation-dataset) | [`sample_data/lafan1_smplx/README.md`](sample_data/lafan1_smplx/README.md) |
@@ -69,8 +78,11 @@ information can be integrated through the same formulation.
 | AdaPT body+racket | [AdaPT](https://humanoidtennis.github.io/AdaPT/) | [`sample_data/adapt/README.md`](sample_data/adapt/README.md) |
 | NR FBX/BVH | FBX/BVH motion | [`sample_data/nr/README.md`](sample_data/nr/README.md) |
 
+<<<<<<< HEAD
 > **OmniContact support.** The public data provides BVH motion, while UMR expects SMPL-X. `scripts/convert_omnicontact_to_umr.py` maps the released BVH skeleton into UMR's flat SMPL-X layout and prepares the object assets. This direct mapping does not reproduce the fitted example's additional upper-body IK; see the [adapter guide](sample_data/omnicontact/README.md).
 
+=======
+>>>>>>> main
 For LAFAN1, use [`lafan_to_smplx`](https://github.com/jaraujo98/lafan_to_smplx)
 to convert BVH motion to SMPL-X before retargeting. Each adapter guide documents
 the expected local layout.
@@ -161,18 +173,42 @@ python scripts/humanoid_retarget_pipeline_nr.py \
 
 # AdaPT body+racket correspondence and retargeting
 python scripts/humanoid_retarget_pipeline_adapt.py
+
+# HiPHI SMPL-X motion
+python scripts/humanoid_retarget_pipeline_hiphi.py \
+  --config robot_configs/humanoid_retarget_unitree_g1_example.json \
+  --data sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004
 ```
+
+See the [HiPHI adapter guide](sample_data/hiphi/README.md) for the converted
+dataset layout, shared correspondence behavior, interaction objects, and batch
+usage.
 
 ## Visualize a Result
 
-Results contain the final robot `qpos` and the metadata required by the GLFW
-MuJoCo viewer:
+Open a result with the default GLFW viewer:
 
 ```bash
 python scripts/visualize_robot_retarget_result.py \
   --result output/unitree_g1_retarget/dance1_subject2_smplx_unitree_g1.npz \
   --play
 ```
+
+For browser or headless batch visualization, point the Viser backend at a
+result folder:
+
+```bash
+python scripts/visualize_robot_retarget_result.py \
+  --result-dir output/unitree_g1_retarget \
+  --viewer-backend viser \
+  --viser-host 0.0.0.0 \
+  --viser-port 8080 \
+  --play
+```
+
+Open the clickable `Network` URL printed in the terminal.
+
+Use **Refresh** to load new results while batch retargeting is running.
 
 ## Batch Retargeting
 
@@ -192,6 +228,19 @@ python scripts/humanoid_retarget_pipeline_batch.py \
   --batch-config humanoid_retarget_defaults_batch_bones_seed.json
 ```
 
+For a complete converted HiPHI dataset, the dedicated batch runner prepares
+missing convex object assets and retargets all discovered sequences:
+
+```bash
+python scripts/humanoid_retarget_pipeline_hiphi_batch.py \
+  --config robot_configs/humanoid_retarget_unitree_g1_example.json
+```
+
+Its object preprocessing and retargeting stages default to one worker to bound
+peak memory. Increase `--object-workers` or `--workers` explicitly when the
+machine has enough memory. HiPHI batch results are saved under
+`output/batch_retarget_hiphi/<robot-name>/`.
+
 Add `--motion-folder sample_data/bones-seed/motions_proportional/bvh` for the
 actor-proportional subset. BONES-SEED associates each `Axxx` motion with its
 matching shape and reuses one correspondence per source-template/robot pair.
@@ -206,6 +255,8 @@ large-scale retargeting.
 | `--recursive` / `--pattern GLOB` | Control motion discovery. |
 | `--workers N` | Set parallel retargeting jobs. |
 | `--correspondence-workers N` | Set parallel correspondence preparation jobs. |
+| `--data-root PATH` | Select the converted HiPHI dataset root. |
+| `--object-workers N` | Set parallel HiPHI object preprocessing jobs. |
 | `--retarget-gpus` | Control GPU assignment. |
 | `--force-retarget` | Rebuild existing results. |
 
@@ -225,6 +276,7 @@ task-specific settings.
 | `humanoid_retarget_defaults_humanoid_character.json` | Humanoid Character |
 | `humanoid_retarget_defaults_hsi_hoi_grail.json` | GRAIL |
 | `humanoid_retarget_defaults_hsi_hoi_standard.json` | OmniContact / OMOMO |
+| `humanoid_retarget_defaults_hiphi.json` | HiPHI |
 | `humanoid_retarget_defaults_nr.json` | NR FBX/BVH |
 | `robot_configs/humanoid_retarget_defaults_adapt.json` | AdaPT SMPL-X+racket |
 

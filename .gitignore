@@ -46,3 +46,13 @@ sample_data/omnicontact/conversion_failures.txt
 *.npz
 *.npy
 *.pkl
+sample_data/hiphi/data/*
+!sample_data/hiphi/data/Getting_up/
+sample_data/hiphi/data/Getting_up/*
+!sample_data/hiphi/data/Getting_up/get_up/
+sample_data/hiphi/data/Getting_up/get_up/*
+!sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/
+sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/*
+!sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/metadata.json
+!sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/motion_actor_smplx.npz
+sample_data/hiphi/object_meshes/
