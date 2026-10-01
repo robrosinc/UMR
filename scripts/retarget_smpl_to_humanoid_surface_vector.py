@@ -662,6 +662,7 @@ def bind_robot_slots(
     project_to_surface=True,
     source_model_type=None,
     template_cfg=None,
+    source_slot_part_ids=None,
 ):
     config = args.config_data
     robot = robot_config(config)
@@ -688,8 +689,40 @@ def bind_robot_slots(
     matrix = cfg_get(config, "robot.frame_transform.smpl_to_robot_root_matrix")
     points_root = smpl_frame_to_robot_root(robot_slot_points_smpl, matrix)
     binding = common.bind_points_to_mesh(points_root, vertices, faces, nearest_vertex_k=nearest_vertex_k)
+    constrained_slot_ids = []
+    slot_geom_names = robot.get("slot_geom_names", {}) or {}
+    if source_slot_part_ids is not None and slot_geom_names:
+        part_ids = np.asarray(source_slot_part_ids, dtype=np.int32)
+        if len(part_ids) != len(points_root):
+            raise ValueError("Source part IDs must match the robot slot count.")
+        for part_name, geom_name in slot_geom_names.items():
+            if part_name not in SMPLX_PART_IDS:
+                raise ValueError(f"Unknown robot slot part: {part_name}")
+            slot_ids = np.flatnonzero(part_ids == SMPLX_PART_IDS[part_name])
+            if not len(slot_ids):
+                continue
+            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+            face_ids = np.flatnonzero(face_geom_ids == geom_id)
+            if geom_id < 0 or not len(face_ids):
+                raise ValueError(f"Robot slot geom {geom_name!r} is missing from the visual mesh")
+            geom_faces = faces[face_ids]
+            vertex_ids, inverse = np.unique(geom_faces, return_inverse=True)
+            restricted = common.bind_points_to_mesh(
+                points_root[slot_ids],
+                vertices[vertex_ids],
+                inverse.reshape(geom_faces.shape),
+                nearest_vertex_k=nearest_vertex_k,
+            )
+            binding["face_ids"][slot_ids] = face_ids[restricted["face_ids"]]
+            for key in ("closest_points", "closest_normals"):
+                binding[key][slot_ids] = restricted[key]
+            constrained_slot_ids.append(slot_ids)
+            print(f"[HumanoidRetarget] constrained {len(slot_ids)} {part_name} slots to {geom_name}")
     bound_geom_ids = face_geom_ids[binding["face_ids"]]
-    points_root_bound = binding["closest_points"] if project_to_surface else points_root
+    points_root_bound = binding["closest_points"] if project_to_surface else points_root.copy()
+    if not project_to_surface:
+        for slot_ids in constrained_slot_ids:
+            points_root_bound[slot_ids] = binding["closest_points"][slot_ids]
     normals_world = binding["closest_normals"] @ center_rot.T
     points_world = points_root_bound @ center_rot.T + center_pos
     local_pos = np.empty_like(points_root_bound, dtype=np.float32)
@@ -2562,6 +2595,7 @@ def main():
         project_to_surface=bool(args.project_robot_slots),
         source_model_type=source_model_type,
         template_cfg=template_cfg,
+        source_slot_part_ids=source_slot_part_ids,
     )
     if use_composite_racket_contact:
         candidate_racket_ids = np.asarray(composite_racket_state["racket_slot_ids"], dtype=np.int32)

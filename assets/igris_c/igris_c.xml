@@ -1,5 +1,5 @@
-<mujoco model="igris_c_v2">
-  <compiler angle="radian" meshdir="meshes/igris_c_v2/" balanceinertia="false"/>
+<mujoco model="igris_c">
+  <compiler angle="radian" meshdir="meshes/igris_c/" balanceinertia="false"/>
   <size njmax="4000" nconmax="2000" />
   <option timestep='0.005' iterations="500" tolerance="1e-7" solver="Newton" jacobian="dense" cone="elliptic" noslip_iterations="100" noslip_tolerance="1e-7"/>
 
@@ -67,11 +67,11 @@
     <mesh name="Hip_Yaw" file="231_232_Hip_Yaw.stl" scale="0.001 0.001 0.001"/>
     <mesh name="Knee_Pitch" file="241_242_Knee_Pitch.stl" scale="0.001 0.001 0.001"/>
     <mesh name="Ankle_Pitch_Left" file="Ankle_Pitch_Left.stl" scale="0.01 0.01 0.01"/>
-    <mesh name="Ankle_Roll_Left_v2" file="l_foot_v2.stl" scale="0.01 0.01 0.01"/>
+    <mesh name="Ankle_Roll_Left" file="l_foot.stl" scale="0.01 0.01 0.01"/>
     <mesh name="Hip_Pitch_Right" file="Hip_Pitch_Right.stl" scale="0.01 0.01 0.01"/>
     <mesh name="Hip_Roll_Right" file="222_Hip_Roll_Right.stl" scale="0.001 0.001 0.001"/>
     <mesh name="Ankle_Pitch_Right" file="Ankle_Pitch_Right.stl" scale="0.01 0.01 0.01"/>
-    <mesh name="Ankle_Roll_Right_v2" file="r_foot_v2.stl" scale="0.01 0.01 0.01"/>
+    <mesh name="Ankle_Roll_Right" file="r_foot.stl" scale="0.01 0.01 0.01"/>
     <mesh name="Shoulder_Pitch_Left" file="311_Shoulder_Pitch_Left.stl" scale="0.001 0.001 0.001"/>
     <mesh name="Shoulder_Roll_Left" file="321_Shoulder_Roll_Left.stl" scale="0.001 0.001 0.001"/>
     <mesh name="Shoulder_Yaw" file="331_Shoulder_Yaw_Left.stl" scale="0.001 0.001 0.001"/>
@@ -87,6 +87,7 @@
     <mesh name="Wrist_Roll_Right" file="Wrist_Roll_Right.stl" scale="0.01 0.01 0.01"/>
     <mesh name="Wrist_Pitch_Right" file="Wrist_Pitch_Right.stl" scale="0.01 0.01 0.01"/>
     <mesh name="Right_Hand" file="Hand_Right.stl" scale="0.01 0.01 0.01"/>
+    <mesh name="Hand_Palm_Patch" file="Hand_Palm_Patch.obj"/>
 
        
     <texture type="skybox" builtin="gradient" width="128" height="128" rgb1="1.0 1.0 1.0" rgb2="0.4 0.4 0.4"/>
@@ -152,7 +153,7 @@
                         <inertial pos="0.01282 0 -0.04623" mass="0.634" fullinertia="0.00073 0.00256 0.00244 0 0.00047 0"/>
                         <geom name="foot_box_left" pos="0.048 0 -0.0685" quat="1 0 0 0" type="box" size="0.1 0.035 0.0025" class="collision" rgba="0.1 0.1 0.1 1"/>
                         <!-- <geom name="Link_Ankle_Roll_Left_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Ankle_Roll_Left" class="collision" /> -->
-                        <geom name="Link_Ankle_Roll_Left_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Ankle_Roll_Left_v2" class="visual" />
+                        <geom name="Link_Ankle_Roll_Left_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Ankle_Roll_Left" class="visual" />
                       </body>
                     </body>
                   </body>
@@ -189,7 +190,7 @@
                         <inertial pos="0.01282 0 -0.04623" mass="0.634" fullinertia="0.00073 0.00256 0.00244 0 0.00047 0"/>
                         <geom name="foot_box_right" pos="0.048 0 -0.0685" quat="1 0 0 0" type="box" size="0.1 0.035 0.0025" class="collision" rgba="0.1 0.1 0.1 1"/>
                         <!-- <geom name="Link_Ankle_Roll_Right_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Ankle_Roll_Right" class="collision" /> -->
-                        <geom name="Link_Ankle_Roll_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Ankle_Roll_Right_v2" class="visual" />
+                        <geom name="Link_Ankle_Roll_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Ankle_Roll_Right" class="visual" />
                       </body>
                     </body>
                   </body>
@@ -228,7 +229,7 @@
                   <joint name="Joint_Wrist_Roll_Left" type="hinge" ref="0.0" class="actuator_8" range="-0.872664626 1.221730476" axis="1 0 0" />
                   <inertial pos="0.00000 0.00604 0.00031" quat="1.0 0.0 0.0 0.0" mass="0.012" diaginertia="0.00001 0.00001 0.00001" />
                   <!-- <geom name="Link_Wrist_Roll_Left_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Wrist_Roll_Left" class="collision" /> -->
-                  <geom name="Link_Wrist_Roll_Left_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Roll_Left" class="visual" />
+                  <!-- <geom name="Link_Wrist_Roll_Left_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Roll_Left" class="visual" /> -->
                   <body name="Link_Wrist_Pitch_Left" pos="0 0 0" quat="1.0 0.0 0.0 0.0">
                     <joint name="Joint_Wrist_Pitch_Left" type="hinge" ref="0.0" class="actuator_8" range="-0.698131701 0.698131701" axis="0 1 0" />
                     <inertial pos="0 0.01019 -0.01687" quat="1.0 0.0 0.0 0.0" mass="0.020" diaginertia="0.00001 0.00001 0.00001" />
@@ -240,6 +241,7 @@
                       <inertial pos="0.00910 0.00371 0.07839" quat="1.0 0.0 0.0 0.0" mass="0.333" diaginertia="0.00081 0.00117 0.00042" />
                       <geom name="Left_Hand_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Left_Hand" class="collision" />
                       <geom name="Left_Hand_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Left_Hand" class="visual" />
+                      <geom name="Left_Palm_binding_visual" pos="0 0.03 0.13" type="mesh" mesh="Hand_Palm_Patch" class="visual" rgba="1 0 0 1" />
                     </body>
                   </body>
                 </body>
@@ -277,18 +279,19 @@
                   <joint name="Joint_Wrist_Roll_Right" type="hinge" ref="0.0" class="actuator_8" range="-1.221730476 0.872664626" axis="1 0 0" />
                   <inertial pos="0.00000 -0.00604 0.00031" quat="1.0 0.0 0.0 0.0" mass="0.012" diaginertia="0.00001 0.00001 0.00001" />
                   <!-- <geom name="Link_Wrist_Roll_Right_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Wrist_Roll_Right" class="collision" /> -->
-                  <geom name="Link_Wrist_Roll_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Roll_Right" class="visual" />
+                  <!-- <geom name="Link_Wrist_Roll_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Roll_Right" class="visual" /> -->
                   <body name="Link_Wrist_Pitch_Right" pos="0 0 0" quat="1.0 0.0 0.0 0.0">
                     <joint name="Joint_Wrist_Pitch_Right" type="hinge" ref="0.0" class="actuator_8" range="-0.698131701 0.698131701" axis="0 1 0" />
                     <inertial pos="0.00000 -0.01019 -0.01687" quat="1.0 0.0 0.0 0.0" mass="0.020" diaginertia="0.00001 0.00001 0.00001" />
                     <!-- <geom name="Link_Wrist_Pitch_Right_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Wrist_Pitch_Right" class="collision" /> -->
-                    <geom name="Link_Wrist_Pitch_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Pitch_Right" class="visual" />
+                    <!-- <geom name="Link_Wrist_Pitch_Right_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Wrist_Pitch_Right" class="visual" /> -->
                     <!-- <geom name="Right_Hand_Sphere_collision" pos="0 -0.0109 -0.07" quat="1 0 0 0" type="sphere" size="0.05" density="0" class="collision" /> -->
                     <!-- <geom name="Right_Hand_Sphere_visual" pos="0 -0.0109 -0.07" quat="1 0 0 0" type="sphere" size="0.05" material="random" class="visual" /> -->
                     <body name="Right_Hand" pos="0 -0.0109 -0.024" quat="0 1.0 0 0">
                       <inertial pos="0.00910 -0.00371 0.07839" quat="1.0 0.0 0.0 0.0" mass="0.333" diaginertia="0.00081 0.00117 0.00042" />
                       <geom name="Right_Hand_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="Right_Hand" class="collision" />
                       <geom name="Right_Hand_visual" pos="0 0 0" quat="1 0 0 0" material="random" type="mesh" mesh="Right_Hand" class="visual" />
+                      <geom name="Right_Palm_binding_visual" pos="0 -0.03 0.13" type="mesh" mesh="Hand_Palm_Patch" class="visual" rgba="1 0 0 1" />
                     </body>
                   </body>
                 </body>

@@ -1,8 +1,12 @@
 {
   "robot": {
     "name": "igris_c",
-    "xml": "../assets/igris_c/igris_c_v2.xml",
+    "xml": "../assets/igris_c/igris_c.xml",
     "point_cloud_center": "body:Link_Waist_Pitch",
+    "slot_geom_names": {
+      "leftHand": "Left_Palm_binding_visual",
+      "rightHand": "Right_Palm_binding_visual"
+    },
     "tpose_qpos": {
       "Joint_Shoulder_Pitch_Left": 0.0,
       "Joint_Shoulder_Roll_Left": 1.57079632679,
