@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seq-key", action="append", help="Convert only this sequence; repeatable")
     parser.add_argument("--limit", type=int, default=0, help="Maximum number of sequences, after filtering; 0 means all")
     parser.add_argument("--collision", choices=("hull", "coacd"), default="hull", help="Collision mesh preparation")
+    parser.add_argument(
+        "--coacd-threshold",
+        type=float,
+        default=0.03,
+        help="CoACD concavity threshold; lower values produce finer decompositions (default: 0.03)",
+    )
     parser.add_argument("--scale-warning", type=float, default=0.01, help="Warn above this relative per-frame scale range")
     parser.add_argument("--overwrite", action="store_true", help="Replace previously converted sequence files")
     args = parser.parse_args()
@@ -42,6 +48,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--fps must be positive and finite")
     if args.limit < 0 or args.scale_warning < 0:
         parser.error("--limit and --scale-warning must be nonnegative")
+    if not np.isfinite(args.coacd_threshold) or not 0.01 <= args.coacd_threshold <= 1.0:
+        parser.error("--coacd-threshold must be finite and in [0.01, 1.0]")
     if args.input == args.output or args.input in args.output.parents:
         parser.error("--output must be outside --input")
     return args
@@ -84,12 +92,19 @@ def write_obj(path: Path, vertices: np.ndarray, faces: np.ndarray) -> None:
             handle.write(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}\n")
 
 
-def prepare_asset(source: Path, assets_dir: Path, collision: str) -> tuple[Path, list[Path]]:
+def prepare_asset(
+    source: Path,
+    assets_dir: Path,
+    collision: str,
+    coacd_threshold: float,
+) -> tuple[Path, list[Path]]:
     assets_dir.mkdir(parents=True, exist_ok=True)
     visual = assets_dir / source.name
     if not visual.exists():
         shutil.copy2(source, visual)
-    pattern = f"{source.stem}_{collision}_collision_*.obj"
+    threshold_tag = f"_t{coacd_threshold:.6g}".replace(".", "p") if collision == "coacd" else ""
+    asset_tag = f"{collision}{threshold_tag}"
+    pattern = f"{source.stem}_{asset_tag}_collision_*.obj"
     cached = sorted(assets_dir.glob(pattern))
     if cached:
         return visual, cached
@@ -111,10 +126,10 @@ def prepare_asset(source: Path, assets_dir: Path, collision: str) -> tuple[Path,
             import coacd
         except ImportError as error:
             raise RuntimeError("--collision coacd requires the coacd package from requirements-umr.txt") from error
-        result = coacd.run_coacd(coacd.Mesh(vertices, faces), threshold=0.03)
+        result = coacd.run_coacd(coacd.Mesh(vertices, faces), threshold=coacd_threshold)
         collision_paths = []
         for index, (part_vertices, part_faces) in enumerate(result):
-            target = assets_dir / f"{source.stem}_{collision}_collision_{index}.obj"
+            target = assets_dir / f"{source.stem}_{asset_tag}_collision_{index}.obj"
             write_obj(target, np.asarray(part_vertices), np.asarray(part_faces))
             collision_paths.append(target)
         if not collision_paths:
@@ -175,7 +190,14 @@ def output_current(seq_dir: Path, object_name: str, args: argparse.Namespace) ->
         return (
             metadata.get("converter_version") == VERSION
             and float(metadata.get("fps")) == args.fps
-            and all(part.get("collision") == args.collision for part in metadata["object_parts"].values())
+            and all(
+                part.get("collision") == args.collision
+                and (
+                    args.collision != "coacd"
+                    or float(part.get("coacd_threshold", -1.0)) == args.coacd_threshold
+                )
+                for part in metadata["object_parts"].values()
+            )
         )
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return False
@@ -242,10 +264,17 @@ def convert_sequence(record: dict, split: str, data_dir: Path, output: Path, arg
     object_meta = {}
     assets_dir = output / "object_mjcf" / "assets"
     for stem, position, rotation, scale, variation, invalid_frames, source in prepared:
-        visual, collisions = prepare_asset(source, assets_dir, args.collision)
+        visual, collisions = prepare_asset(source, assets_dir, args.collision, args.coacd_threshold)
         write_mjcf(seq_dir / f"{stem}.xml", stem, visual, collisions, scale)
         write_trajectory(seq_dir / f"prop_{stem}.csv", position, rotation)
-        object_meta[stem] = {"source_mesh": str(source), "median_scale": scale, "relative_scale_range": variation, "nonpositive_scale_frames": invalid_frames, "collision": args.collision}
+        object_meta[stem] = {
+            "source_mesh": str(source),
+            "median_scale": scale,
+            "relative_scale_range": variation,
+            "nonpositive_scale_frames": invalid_frames,
+            "collision": args.collision,
+            "coacd_threshold": args.coacd_threshold if args.collision == "coacd" else None,
+        }
     metadata = {"converter_version": VERSION, "source_sequence": name, "split": split, "frames": frames, "fps": args.fps, "object_parts": object_meta, "note": "SMPL-H body parameters placed in SMPL-X body slots; remaining pose slots are zero. Per-frame positive object scale is approximated by its median; nonpositive scale frames are not represented exactly."}
     (seq_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return warnings
