@@ -136,14 +136,14 @@
     "self_contact_map_body_topk": {
       "default": 1
     },
-    "object_contact_map_cost": 5.0,
+    "object_contact_map_cost": 7.0,
     "object_contact_map_threshold": 0.1,
     "object_contact_map_snap_threshold": 0.005,
     "object_contact_map_max_points": 128,
     "object_contact_map_samples": 1024,
     "retarget_object_size": "scaled",
-    "smooth_cost": 1.0,
-    "temporal_smooth_cost": 0.5,
+    "smooth_cost": 3.0,
+    "temporal_smooth_cost": 1.5,
     "trajectory_filter_mode": "lqr",
     "trajectory_filter_data_cost": 1.0,
     "trajectory_filter_velocity_cost": 0.0,
