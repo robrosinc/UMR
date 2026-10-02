@@ -82,7 +82,7 @@ The batch driver fits one correspondence per unique gender/betas template and
 reuses it for all matching motions. `--seq-key <capture-id>` selects one motion;
 use the full `category__case__capture-id` key when duplicate capture IDs exist.
 Pass `--force-retarget` to rerun motions already present in the output directory.
-The IGRIS C config uses `assets/igris_c/igris_c_v2.xml` and centers the robot
+The IGRIS C config uses `assets/igris_c/igris_c.xml` and centers the robot
 point cloud on `Link_Waist_Pitch`.
 
 Files such as `motion_actor.npz`, IK reports, matched-name arrays, residuals,

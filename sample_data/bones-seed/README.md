@@ -153,7 +153,7 @@ silently falling back to a generic SOMA body. The batch defaults use 20 retarget
 workers and 8 correspondence workers; override `--workers` and
 `--correspondence-workers` when local CPU/GPU capacity is smaller.
 
-For IGRIS C, run the dedicated wrapper. It selects `igris_c_v2.xml`, uses the
+For IGRIS C, run the dedicated wrapper. It selects `igris_c.xml`, uses the
 waist pitch link as the robot point-cloud center, and defaults to four retarget
 workers and one correspondence worker:
 

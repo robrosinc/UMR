@@ -43,6 +43,20 @@ frame count. The sequence used by the command below is female and therefore
 requires the licensed `smpl/SMPLX_FEMALE.pkl`; place the neutral or male model in `smpl/`
 when selected by another sequence.
 
+The conversion script defaults to CoACD collision decomposition. Its
+`--coacd-threshold` option defaults to `0.03`; smaller values generally make
+more detailed convex pieces. The shell wrapper exposes this as
+`COACD_THRESHOLD`, and `COLLISION=hull` selects the single convex hull mode.
+When converting over an existing output with a different collision setting,
+pass `--overwrite`.
+
+```bash
+bash scripts/convert_omomo_to_umr.sh \
+  /home/robros/workspace/motion_datas/omomo \
+  sample_data/omomo \
+  --overwrite
+```
+
 The sequence-local XML and `prop_<object-name>.csv` must share the same object
 stem. The CSV stores per-frame `px,py,pz,qx,qy,qz,qw`; optional `frame_id` and
 `timestamp` columns may precede them. The XML may reference shared meshes under
