@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import tempfile
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--defaults", type=Path, default=ROOT / "humanoid_retarget_defaults_hsi_hoi_standard.json")
     parser.add_argument("--data", type=Path, default=ROOT / "sample_data/omomo")
     parser.add_argument("--output", type=Path, default=None, help="Result .npz directory; default output/<robot>_retarget")
+    parser.add_argument("--workers", type=int, default=max(1, min(4, os.cpu_count() or 1)), help="Concurrent retarget jobs")
+    parser.add_argument("--retarget-cpu-threads", type=int, default=1, help="CPU threads per retarget job")
     parser.add_argument("--limit", type=int, default=0, help="First N sequences; 0 means all")
     parser.add_argument("--seq-key", action="append", default=[], help="Select a sequence stem; repeat to select more")
     parser.add_argument("--split", choices=("all", "train", "test"), default="all")
@@ -36,14 +40,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-build", action="store_true")
     parser.add_argument("--force-train", action="store_true")
     parser.add_argument("--force-retarget", action="store_true")
-    parser.add_argument("--fail-fast", action="store_true", help="Stop on the first failed sequence")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop scheduling new sequences after a failure; running workers finish")
     parser.add_argument("--max-frames", type=int, default=None, help="Retarget at most this many frames per sequence")
+    parser.add_argument(
+        "--stream-chunk-frames",
+        type=int,
+        default=None,
+        help="Process source geometry and HOI contact data in bounded frame chunks.",
+    )
     args = parser.parse_args()
     args.config = args.config.expanduser().resolve()
     args.defaults = args.defaults.expanduser().resolve()
     args.data = args.data.expanduser().resolve()
     if args.limit < 0:
         parser.error("--limit must be nonnegative")
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
+    if args.retarget_cpu_threads < 1:
+        parser.error("--retarget-cpu-threads must be at least 1")
     if args.max_frames is not None and args.max_frames <= 0:
         parser.error("--max-frames must be positive")
     if args.output is not None:
@@ -175,6 +189,7 @@ def sequence_config(base_config: dict, seq: Sequence, output: Path, work_dir: Pa
         end=None,
         stride=None,
         max_frames=args.max_frames,
+        stream_chunk_frames=args.stream_chunk_frames,
         dry_run=False,
     )
     config, config_path = make_runtime_config(base_config, seq.key, seq.path, motion_path, work_dir, options, object_dir=object_dir)
@@ -259,17 +274,57 @@ def main() -> None:
 
     counts = {"retargeted": 0, "reused": 0, "failed": 0}
     failures = []
-    for index, seq in enumerate(sequences, start=1):
-        print(f"[HSIHOIBatch] motion {index}/{len(sequences)} {seq.key}", flush=True)
-        try:
-            status = retarget_sequence(base_config, seq, output, slots_by_template[seq.template], args)
-            counts[status] += 1
-        except Exception as error:
-            counts["failed"] += 1
-            failures.append(f"{seq.key}\t{type(error).__name__}: {error}")
-            print(f"[HSIHOIBatch][FAIL] {failures[-1]}", flush=True)
-            if args.fail_fast:
-                break
+    active_workers = min(args.workers, len(sequences))
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "BLIS_NUM_THREADS",
+        "NUMBA_NUM_THREADS",
+    ):
+        os.environ[key] = str(args.retarget_cpu_threads)
+    print(
+        f"[HSIHOIBatch] retarget workers={active_workers} "
+        f"cpu_threads_per_worker={args.retarget_cpu_threads}",
+        flush=True,
+    )
+    sequence_iter = iter(enumerate(sequences, start=1))
+    with ThreadPoolExecutor(max_workers=active_workers) as executor:
+        pending = {}
+
+        def submit_next() -> bool:
+            try:
+                index, seq = next(sequence_iter)
+            except StopIteration:
+                return False
+            print(f"[HSIHOIBatch] motion {index}/{len(sequences)} {seq.key}", flush=True)
+            future = executor.submit(retarget_sequence, base_config, seq, output, slots_by_template[seq.template], args)
+            pending[future] = (index, seq)
+            return True
+
+        for _ in range(active_workers):
+            submit_next()
+
+        stop_scheduling = False
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in sorted(done, key=lambda item: pending[item][0]):
+                _, seq = pending.pop(future)
+                try:
+                    status = future.result()
+                    counts[status] += 1
+                except Exception as error:
+                    counts["failed"] += 1
+                    failures.append(f"{seq.key}\t{type(error).__name__}: {error}")
+                    print(f"[HSIHOIBatch][FAIL] {failures[-1]}", flush=True)
+                    if args.fail_fast:
+                        stop_scheduling = True
+            if not stop_scheduling:
+                for _ in range(active_workers - len(pending)):
+                    if not submit_next():
+                        break
     failure_file = output / "batch_failures.txt"
     failure_file.write_text("\n".join(failures) + ("\n" if failures else ""), encoding="utf-8")
     print(f"[HSIHOIBatch] complete {counts} output={output} failures={failure_file}")
