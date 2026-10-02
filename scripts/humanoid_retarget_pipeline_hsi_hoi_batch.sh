@@ -7,3 +7,4 @@ python /home/robros/workspace/UMR/scripts/humanoid_retarget_pipeline_hsi_hoi_bat
     --output /home/robros/workspace/UMR/output/igris_c_omomo \
     --workers 4 \
     --retarget-cpu-threads 1 \
+    # --force-retarget
