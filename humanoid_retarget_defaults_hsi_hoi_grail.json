@@ -95,7 +95,7 @@
     "object": {
       "grail_mjcf_dir": "auto",
       "grail_auto_prepare_mjcf": true,
-      "grail_mjcf_python": "python",
+      "grail_mjcf_python": null,
       "grail_coacd_threshold": 0.03,
       "grail_coacd_max_convex_hull": 32,
       "grail_coacd_mcts_iterations": 200,
@@ -138,7 +138,7 @@
     "self_contact_map_body_topk": {
       "default": 1
     },
-    "object_contact_map_cost": 100.0,
+    "object_contact_map_cost": 10.0,
     "object_contact_map_threshold": 0.1,
     "object_contact_map_snap_threshold": 0.005,
     "object_contact_map_max_points": 128,

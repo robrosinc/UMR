@@ -69,6 +69,8 @@ hf download lightcone02/OmniContact-Dataset \
 `bash scripts/humanoid_retarget_pipeline_hsi_hoi_batch.sh`
 * check omomo region
 * Hand slots are force-bound to the configured palm geoms because point-cloud mapping can place them differently from the intended locations on long-armed robots. To disable this and use the default whole-visual-mesh binding, set `robot.slot_geom_names` to `{}` in `robot_configs/humanoid_retarget_igris_c_omomo.json`.
+### GRAIL
+`bash scripts/humanoid_retarget_pipeline_hsi_hoi_batch_grail_igris_c.sh`
 
 ## Convert to ROBROSLAB Canonical form
 ### OMOMO
