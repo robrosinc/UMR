@@ -22,11 +22,14 @@ from viser_mujoco_viewer import (
     _add_model_geometries,
     _camera_position,
     _ViserVideoRecorder,
+    _add_robot_com_markers,
     _ground_contact_frame,
     _install_keyboard_shortcuts,
     _mat_to_wxyz,
     _print_viser_panel,
+    _projected_robot_com,
     _rgb_u8,
+    _robot_com_body_ids,
     _template_points_to_world,
 )
 
@@ -290,6 +293,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             color=CAMERA_ACTIVE_COLOR if state["follow_camera"] else None,
             disabled=True,
         )
+        com_checkbox = server.gui.add_checkbox("Robot CoM (ground)", bool(args.show_robot_com))
 
     server.gui.add_markdown("**Capture**")
     with server.gui.add_folder(None):
@@ -425,6 +429,8 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
                 for body_id, handle in active["body_handles"]:
                     handle.position = np.asarray(data.xpos[body_id], dtype=np.float32)
                     handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
+                for body_id, handle in zip(active["com_body_ids"], active["com_handles"]):
+                    handle.position = _projected_robot_com(data, body_id)
                 source_overlay = descriptor.get("source_overlay")
                 if active.get("source_handle") is not None:
                     active["source_handle"].points = (
@@ -471,6 +477,10 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             descriptor["model"],
             descriptor["data"],
             root_path=root_path,
+        )
+        com_body_ids = _robot_com_body_ids(descriptor["model"], (0,))
+        com_handles = _add_robot_com_markers(
+            server, root_path, descriptor["data"], com_body_ids, bool(com_checkbox.value)
         )
         source_handle = None
         source_overlay = descriptor.get("source_overlay")
@@ -537,6 +547,8 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             "root_path": root_path,
             "root_handle": root_handle,
             "body_handles": body_handles,
+            "com_body_ids": com_body_ids,
+            "com_handles": com_handles,
             "source_handle": source_handle,
             "robot_handle": robot_handle,
             "ground_handle": ground_handle,
@@ -821,6 +833,14 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
     def _loop_update(_event) -> None:
         with state_lock:
             state["loop"] = bool(loop_checkbox.value)
+
+    @com_checkbox.on_update
+    def _com_update(_event) -> None:
+        with state_lock, server.atomic():
+            active = state.get("active")
+            if active is not None:
+                for handle in active["com_handles"]:
+                    handle.visible = bool(com_checkbox.value)
 
     @camera_button.on_click
     def _camera_update(event) -> None:

@@ -26,6 +26,8 @@ SNAPSHOT_WIDTH = 2560
 SNAPSHOT_HEIGHT = 1440
 SNAPSHOT_SUPERSAMPLE_LEVELS = (1.5, 1.25, 1.0)
 CAMERA_ACTIVE_COLOR = (51, 122, 184)
+COM_MARKER_RADIUS = 0.05
+COM_MARKER_HEIGHT = 0.006
 
 
 def _discover_ipv4_addresses() -> list[str]:
@@ -312,6 +314,52 @@ def _ground_contact_frame(data: mujoco.MjData, overlay, frame: int):
     return points, np.clip(np.rint(colors), 0, 255).astype(np.uint8)
 
 
+def _robot_com_body_ids(model: mujoco.MjModel, qpos_starts) -> tuple[int, ...]:
+    """Find each robot's free-joint root, excluding separate object bodies."""
+    starts = {int(start) for start in qpos_starts}
+    return tuple(
+        int(model.jnt_bodyid[joint_id])
+        for joint_id in range(model.njnt)
+        if int(model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_FREE)
+        and int(model.jnt_qposadr[joint_id]) in starts
+        and float(model.body_subtreemass[int(model.jnt_bodyid[joint_id])]) > 0.0
+    )
+
+
+def _projected_robot_com(data: mujoco.MjData, body_id: int) -> np.ndarray:
+    """Project MuJoCo's mass-weighted subtree CoM onto the z=0 ground."""
+    position = np.asarray(data.subtree_com[body_id], dtype=np.float32).copy()
+    position[2] = COM_MARKER_HEIGHT
+    return position
+
+
+def _add_robot_com_markers(server, root_path: str, data: mujoco.MjData, body_ids, visible: bool):
+    """Add small, horizontal disks at the projected robot CoM positions."""
+    angles = np.linspace(0.0, 2.0 * np.pi, 33, dtype=np.float32)[:-1]
+    vertices = np.zeros((len(angles) + 1, 3), dtype=np.float32)
+    vertices[1:, 0] = COM_MARKER_RADIUS * np.cos(angles)
+    vertices[1:, 1] = COM_MARKER_RADIUS * np.sin(angles)
+    faces = np.asarray(
+        [(0, index + 1, (index + 1) % len(angles) + 1) for index in range(len(angles))],
+        dtype=np.uint32,
+    )
+    return [
+        server.scene.add_mesh_simple(
+            f"{root_path}/overlays/robot_com_{index:02d}",
+            vertices=vertices,
+            faces=faces,
+            color=(255, 46, 64),
+            flat_shading=True,
+            side="double",
+            cast_shadow=False,
+            receive_shadow=False,
+            position=_projected_robot_com(data, body_id),
+            visible=visible,
+        )
+        for index, body_id in enumerate(body_ids)
+    ]
+
+
 def _install_keyboard_shortcuts(server, bindings: dict[str, str]) -> None:
     """Install a tiny Viser-GUI bridge for the GLFW-compatible hotkeys."""
     import html
@@ -537,6 +585,7 @@ def run_viser_viewer(
     fixed_distance: float,
     camera_lookat: Callable[[int], np.ndarray | None] | None,
     title: str,
+    robot_qpos_starts=(0,),
 ) -> None:
     """Serve an interactive browser viewer for an already-loaded result."""
     try:
@@ -587,6 +636,10 @@ def run_viser_viewer(
         cast_shadow=True,
     )
     body_handles, _static_geom_handles = _add_model_geometries(server, model, data, root_path="/world")
+    com_body_ids = _robot_com_body_ids(model, robot_qpos_starts)
+    com_handles = _add_robot_com_markers(
+        server, "/world", data, com_body_ids, bool(args.show_robot_com)
+    )
 
     source_handle = None
     if source_overlay is not None:
@@ -689,6 +742,7 @@ def run_viser_viewer(
             "Fixed camera (F): ON" if state["follow_camera"] else "Fixed camera (F): OFF",
             color=CAMERA_ACTIVE_COLOR if state["follow_camera"] else None,
         )
+        com_checkbox = server.gui.add_checkbox("Robot CoM (ground)", bool(args.show_robot_com))
     server.gui.add_markdown("**Capture**")
     with server.gui.add_folder(None):
         snapshot_button = server.gui.add_button("Snapshot (Ctrl/Cmd+P)")
@@ -763,6 +817,8 @@ def run_viser_viewer(
                 for body_id, handle in body_handles:
                     handle.position = np.asarray(data.xpos[body_id], dtype=np.float32)
                     handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
+                for body_id, handle in zip(com_body_ids, com_handles):
+                    handle.position = _projected_robot_com(data, body_id)
                 if source_handle is not None:
                     source_handle.points = (
                         np.asarray(source_overlay["points"][frame, source_overlay["slot_ids"]], dtype=np.float32)
@@ -851,6 +907,12 @@ def run_viser_viewer(
     def _loop_update(_event) -> None:
         with state_lock:
             state["loop"] = bool(loop_checkbox.value)
+
+    @com_checkbox.on_update
+    def _com_update(_event) -> None:
+        with state_lock, server.atomic():
+            for handle in com_handles:
+                handle.visible = bool(com_checkbox.value)
 
     @camera_button.on_click
     def _camera_update(event) -> None:

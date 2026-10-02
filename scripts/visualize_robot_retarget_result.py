@@ -138,6 +138,9 @@ def parse_args():
     parser.add_argument("--show-robot-objects", action="store_true", default=True)
     parser.add_argument("--no-show-robot-objects", dest="show_robot_objects", action="store_false")
     parser.add_argument("--robot-object-offset", type=float, nargs=3, default=(0.0, 0.0, 0.0))
+    parser.add_argument("--show-robot-com", action="store_true", default=True,
+                        help="Show each robot's ground-projected CoM in the Viser viewer.")
+    parser.add_argument("--no-show-robot-com", dest="show_robot_com", action="store_false")
 
     parser.add_argument("--show-robot-slots", action="store_true", default=True)
     parser.add_argument("--no-show-robot-slots", dest="show_robot_slots", action="store_false")
@@ -1551,6 +1554,7 @@ def run_all_mode(args) -> None:
             fixed_distance=max(float(args.camera_distance), spacing * max(2.5, 0.7 * len(entries))),
             camera_lookat=lambda _frame: np.asarray([0.0, 0.0, 0.7], dtype=np.float64),
             title="UMR Multi-Robot Retarget Viewer",
+            robot_qpos_starts=tuple(entry["qpos_slice"].start for entry in entries),
         )
         return
 
