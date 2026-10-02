@@ -35,6 +35,7 @@ from viser_mujoco_viewer import (
 
 
 EMPTY_OPTION = "No results found"
+CLIP_JUMP_MULTIPLIERS = (1, 10, 100, 1000)
 
 
 def scan_result_files(result_dir: Path) -> list[Path]:
@@ -182,7 +183,7 @@ def _install_result_dropdown_scrollbar(server, dropdown_uuid: str) -> None:
     )
 
 
-def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) -> None:
+def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, scan_results=scan_result_files) -> None:
     """Serve a Viser browser that can refresh and switch batch results."""
     try:
         import viser
@@ -244,6 +245,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
         "paths": [],
         "label_to_path": {},
         "frame": 0,
+        "clip_jump_index": 0,
         "playing": not bool(args.paused),
         "speed": 1.0,
         "loop": bool(args.loop),
@@ -270,8 +272,10 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
     with server.gui.add_folder(None):
         result_dropdown = server.gui.add_dropdown("Result clip", (EMPTY_OPTION,), disabled=True)
         refresh_button = server.gui.add_button("Refresh")
-        previous_clip_button = server.gui.add_button("Previous clip", disabled=True)
-        next_clip_button = server.gui.add_button("Next clip", disabled=True)
+        previous_clip_button = server.gui.add_button("Previous 1 clip (←)", disabled=True)
+        next_clip_button = server.gui.add_button("Next 1 clip (→)", disabled=True)
+        jump_down_button = server.gui.add_button("Jump ÷10 (PgDn)", disabled=True)
+        jump_up_button = server.gui.add_button("Jump ×10 (PgUp)")
     _install_result_dropdown_scrollbar(server, str(result_dropdown._impl.uuid))
 
     server.gui.add_markdown("**Playback**")
@@ -342,6 +346,15 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
         )
         previous_clip_button.disabled = busy or index <= 0
         next_clip_button.disabled = busy or index < 0 or index >= len(paths) - 1
+
+    def set_clip_jump_index(index: int) -> None:
+        index = int(np.clip(index, 0, len(CLIP_JUMP_MULTIPLIERS) - 1))
+        state["clip_jump_index"] = index
+        multiplier = CLIP_JUMP_MULTIPLIERS[index]
+        previous_clip_button.label = f"Previous {multiplier} clip{'s' if multiplier != 1 else ''} (←)"
+        next_clip_button.label = f"Next {multiplier} clip{'s' if multiplier != 1 else ''} (→)"
+        jump_down_button.disabled = index == 0
+        jump_up_button.disabled = index == len(CLIP_JUMP_MULTIPLIERS) - 1
 
     def reset_client_cameras(lookat: np.ndarray, position: np.ndarray) -> None:
         server.initial_camera.look_at = lookat
@@ -429,6 +442,9 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
                 for body_id, handle in active["body_handles"]:
                     handle.position = np.asarray(data.xpos[body_id], dtype=np.float32)
                     handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
+                for entity, handle in active["entity_handles"]:
+                    handle.position = entity["pose_pos"][frame]
+                    handle.wxyz = entity["pose_rot"][frame]
                 for body_id, handle in zip(active["com_body_ids"], active["com_handles"]):
                     handle.position = _projected_robot_com(data, body_id)
                 source_overlay = descriptor.get("source_overlay")
@@ -478,6 +494,28 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             descriptor["data"],
             root_path=root_path,
         )
+        entity_handles = []
+        for index, entity in enumerate(descriptor.get("scene_entities", [])):
+            entity_path = f"{root_path}/entities/{index:04d}"
+            handle = server.scene.add_frame(
+                entity_path,
+                show_axes=False,
+                position=entity["pose_pos"][0],
+                wxyz=entity["pose_rot"][0],
+            )
+            terrain = entity["entity_type"] == "terrain"
+            for mesh_index, (vertices, faces) in enumerate(entity["meshes"]):
+                server.scene.add_mesh_simple(
+                    f"{entity_path}/meshes/{mesh_index:04d}",
+                    vertices=vertices,
+                    faces=faces,
+                    color=(155, 169, 180) if terrain else (208, 161, 91),
+                    opacity=0.35 if terrain else None,
+                    side="double",
+                    cast_shadow=not terrain,
+                    receive_shadow=True,
+                )
+            entity_handles.append((entity, handle))
         com_body_ids = _robot_com_body_ids(descriptor["model"], (0,))
         com_handles = _add_robot_com_markers(
             server, root_path, descriptor["data"], com_body_ids, bool(com_checkbox.value)
@@ -547,6 +585,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             "root_path": root_path,
             "root_handle": root_handle,
             "body_handles": body_handles,
+            "entity_handles": entity_handles,
             "com_body_ids": com_body_ids,
             "com_handles": com_handles,
             "source_handle": source_handle,
@@ -577,6 +616,17 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
         state["selector_write"] = True
         result_dropdown.value = label
         state["selector_write"] = False
+
+    def show_clip_status(path: Path, descriptor: dict) -> None:
+        paths = state["paths"]
+        number = paths.index(path) + 1
+        status_markdown.content = (
+            f"**Motion {number}/{len(paths)}** · "
+            f"{int(descriptor['frame_count'])} frames · "
+            f"{float(descriptor['fps']):.3f} FPS  \n"
+            f"`{path.relative_to(result_dir).as_posix()}`  \n"
+            "MuJoCo kinematics / browser WebGL rendering"
+        )
 
     def load_path(path: Path, client=None) -> bool:
         path = Path(path)
@@ -649,12 +699,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
                 title_markdown.content = (
                     f"**{title}**  \nBatch folder: `{result_dir}`"
                 )
-                status_markdown.content = (
-                    f"`{path.relative_to(result_dir).as_posix()}`  \n"
-                    f"{int(descriptor['frame_count'])} frames · "
-                    f"{float(descriptor['fps']):.3f} FPS · "
-                    "MuJoCo kinematics / browser WebGL rendering"
-                )
+                show_clip_status(path, descriptor)
                 select_dropdown_path(path)
                 set_clip_controls(True)
                 result_dropdown.disabled = False
@@ -685,7 +730,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             )
             notify(client, "Viewer busy", message)
             return
-        paths = scan_result_files(result_dir)
+        paths = scan_results(result_dir)
         labels, mapping = _result_labels(result_dir, paths)
         with state_lock:
             active = state.get("active")
@@ -718,6 +763,8 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             load_path(target, client)
         else:
             with state_lock:
+                if active is not None and current_path in paths:
+                    show_clip_status(current_path, active["descriptor"])
                 update_clip_navigation()
             notify(client, "Results refreshed", f"Found {len(paths)} result(s).")
 
@@ -771,7 +818,8 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
                 index = paths.index(active["descriptor"]["path"])
             except ValueError:
                 return
-            index = int(np.clip(index + direction, 0, len(paths) - 1))
+            jump = CLIP_JUMP_MULTIPLIERS[int(state["clip_jump_index"])]
+            index = int(np.clip(index + direction * jump, 0, len(paths) - 1))
             target = paths[index]
         load_path(target, client)
 
@@ -782,6 +830,16 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
     @next_clip_button.on_click
     def _next_clip(event) -> None:
         adjacent_clip(1, event.client)
+
+    @jump_down_button.on_click
+    def _jump_down(_event) -> None:
+        with state_lock:
+            set_clip_jump_index(int(state["clip_jump_index"]) - 1)
+
+    @jump_up_button.on_click
+    def _jump_up(_event) -> None:
+        with state_lock:
+            set_clip_jump_index(int(state["clip_jump_index"]) + 1)
 
     @play_button.on_click
     def _play_pause(_event) -> None:
@@ -1040,6 +1098,10 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str) ->
             "camera": str(camera_button._impl.uuid),
             "snapshot": str(snapshot_button._impl.uuid),
             "record": str(record_button._impl.uuid),
+            "prev_clip": str(previous_clip_button._impl.uuid),
+            "next_clip": str(next_clip_button._impl.uuid),
+            "jump_down": str(jump_down_button._impl.uuid),
+            "jump_up": str(jump_up_button._impl.uuid),
         },
     )
 

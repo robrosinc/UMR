@@ -67,6 +67,12 @@ def parse_args():
     parser.add_argument("--all-smpl-point-alpha", type=float, default=0.9)
     parser.add_argument("--result", type=Path, default=DEFAULT_RESULT, help="Saved retarget .npz.")
     parser.add_argument(
+        "--result-format",
+        choices=("umr", "canonical"),
+        default="umr",
+        help="Input format for the Viser folder browser (default: umr).",
+    )
+    parser.add_argument(
         "--result-dir",
         type=Path,
         default=None,
@@ -3462,8 +3468,62 @@ def prepare_viser_result_clip(args, result_path: Path) -> dict:
         raise
 
 
+def prepare_canonical_viser_clip(args, result_path: Path) -> dict:
+    """Load a canonical motion PKL, matching scene track, USDs, and bundled robot."""
+    from viser_canonical import load_motion, load_scene_entities
+
+    result_path = Path(result_path).expanduser().resolve()
+    motion, qpos_all, model = load_motion(result_path)
+    start = max(0, int(args.start))
+    end = len(qpos_all) if int(args.end) < 0 else min(len(qpos_all), int(args.end))
+    if start >= end:
+        raise ValueError(f"No frames selected: total={len(qpos_all)}, start={start}, end={end}")
+    frame_ids = np.arange(start, end, dtype=np.int32)
+    fps = float(args.fps) if float(args.fps) > 0 else float(motion["fps"])
+    entities = load_scene_entities(result_path, len(qpos_all), float(motion["fps"]))
+    for entity in entities:
+        entity["pose_pos"] = entity["pose_pos"][frame_ids]
+        entity["pose_rot"] = entity["pose_rot"][frame_ids]
+
+    configure_collision_geom_rendering(args, model)
+    data = mujoco.MjData(model)
+    playback_qpos = qpos_all[frame_ids]
+    fixed_lookat = fixed_camera_lookat(args, playback_qpos, None)
+    fixed_distance = fixed_camera_distance(args, playback_qpos, None, fixed_lookat)
+
+    def set_frame(index: int) -> None:
+        data.qpos[:] = playback_qpos[index]
+        mujoco.mj_forward(model, data)
+
+    def camera_lookat(index: int) -> np.ndarray | None:
+        return camera_frame_lookat(args, data, None, index, fixed_lookat)
+
+    print(
+        f"[{VIS_PREFIX}][Viser][Canonical] clip={result_path.name}, "
+        f"frames={len(playback_qpos)}, fps={fps:.3f}, entities={len(entities)}"
+    )
+    return {
+        "path": result_path,
+        "model": model,
+        "data": data,
+        "frame_count": len(playback_qpos),
+        "fps": max(fps, 1e-6),
+        "set_frame": set_frame,
+        "source_overlay": None,
+        "robot_overlay": None,
+        "ground_overlay": None,
+        "scene_entities": entities,
+        "fixed_lookat": fixed_lookat,
+        "fixed_distance": fixed_distance,
+        "camera_lookat": camera_lookat,
+        "cleanup": lambda: None,
+    }
+
+
 def main():
     args = parse_args()
+    if args.result_format == "canonical" and args.result_dir is None:
+        raise ValueError("--result-format canonical requires --result-dir pointing to the canonical dataset root.")
     if args.result_dir is not None:
         if bool(args.all):
             raise ValueError("--result-dir cannot be combined with --all.")
@@ -3471,10 +3531,18 @@ def main():
             raise ValueError("--result-dir is available only with --viewer-backend viser.")
         if args.record_video is not None:
             raise ValueError("--result-dir cannot be combined with --record-video.")
-        if bool(args.dry_run):
+        if args.result_format == "canonical":
+            from viser_canonical import scan_canonical_motion_files
+
+            scan_results = scan_canonical_motion_files
+            load_clip = lambda path: prepare_canonical_viser_clip(args, path)
+        else:
             from viser_result_folder import scan_result_files
 
-            result_paths = scan_result_files(args.result_dir)
+            scan_results = scan_result_files
+            load_clip = lambda path: prepare_viser_result_clip(args, path)
+        if bool(args.dry_run):
+            result_paths = scan_results(args.result_dir)
             print(f"[{VIS_PREFIX}][Viser] folder={args.result_dir}, results={len(result_paths)}")
             for result_path in result_paths:
                 print(result_path)
@@ -3486,8 +3554,9 @@ def main():
         run_viser_result_folder(
             args=args,
             result_dir=args.result_dir,
-            load_clip=lambda result_path: prepare_viser_result_clip(args, result_path),
+            load_clip=load_clip,
             title=str(args.viser_label),
+            scan_results=scan_results,
         )
         return
     if bool(args.all):

@@ -375,17 +375,29 @@ def _install_keyboard_shortcuts(server, bindings: dict[str, str]) -> None:
   }
   const ids = __BINDINGS__;
   const repeatable = new Set(["step_back", "step_forward", "seek_back", "seek_forward"]);
-  const isEditable = (target) => {
+  // Viser's camera listens on document. Capture these keys on window first.
+  const cameraKeys = new Set([
+    "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  ]);
+  const isTextEntry = (target) => {
     if (!(target instanceof parent.HTMLElement)) return false;
     const tag = target.tagName.toLowerCase();
-    return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+    return tag === "input" || tag === "textarea" || tag === "select" ||
+      target.isContentEditable;
   };
+  const isButton = (target) =>
+    target instanceof parent.HTMLElement && target.tagName.toLowerCase() === "button";
   const click = (name) => {
     const element = parent.document.getElementById(ids[name]);
     if (element) element.click();
   };
   const onKeyDown = (event) => {
-    if (isEditable(event.target) || isEditable(parent.document.activeElement)) return;
+    if (isTextEntry(event.target) || isTextEntry(parent.document.activeElement)) return;
+    if (isButton(event.target) || isButton(parent.document.activeElement)) {
+      if (cameraKeys.has(event.code)) event.stopImmediatePropagation();
+      return;
+    }
     let action = null;
     if ((event.ctrlKey || event.metaKey) && !event.altKey) {
       if (event.code === "KeyP") action = "snapshot";
@@ -399,13 +411,19 @@ def _install_keyboard_shortcuts(server, bindings: dict[str, str]) -> None:
         KeyQ: "seek_back",
         KeyE: "seek_forward",
         KeyF: "camera",
+        ArrowLeft: "prev_clip",
+        ArrowRight: "next_clip",
+        PageUp: "jump_up",
+        PageDown: "jump_down",
       };
-      action = keymap[event.code] || null;
+      const mapped = keymap[event.code];
+      action = mapped && ids[mapped] ? mapped : null;
     }
-    if (action === null || (event.repeat && !repeatable.has(action))) return;
-    event.preventDefault();
+    if (action === null && !cameraKeys.has(event.code)) return;
+    // Keep browser shortcuts intact when a camera key has no UMR action.
+    if (action !== null) event.preventDefault();
     event.stopImmediatePropagation();
-    click(action);
+    if (action !== null && (!event.repeat || repeatable.has(action))) click(action);
   };
   owner.addEventListener("keydown", onKeyDown, true);
   owner[bridgeKey] = {
