@@ -1,7 +1,7 @@
 {
   "robot": {
     "name": "igris_c",
-    "xml": "../assets/igris_c/igris_c.xml",
+    "xml": "../assets/igris_c/igris_c_dummy_hand.xml",
     "point_cloud_center": "body:Link_Waist_Pitch",
     "slot_geom_names": {
       "leftHand": "Left_Palm_binding_visual",
