@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import pickle
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import trimesh
-from pxr import Usd, UsdGeom, Vt
+from pxr import Usd, UsdGeom, UsdPhysics, Vt
 from scipy.spatial.transform import Rotation
 
 
@@ -177,29 +178,89 @@ def object_pose(csv_path: Path, frame_ids: np.ndarray, result) -> tuple[np.ndarr
     return pos.astype(np.float32), wxyz, basis
 
 
-def make_usd(path: Path, root_name: str, meshes: list[tuple[np.ndarray, np.ndarray]]) -> None:
+def make_usd(
+    path: Path,
+    root_name: str,
+    meshes: list[tuple[np.ndarray, np.ndarray]],
+    collision_meshes: list[tuple[np.ndarray, np.ndarray]] | None = None,
+) -> None:
+    """Write visual meshes and optional separate convex collision parts."""
+    if path.suffix != ".usd":
+        raise ValueError(f"Canonical collision assets must use the .usd extension: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     stage = Usd.Stage.CreateNew(str(path))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     root = UsdGeom.Xform.Define(stage, f"/{root_name}")
     stage.SetDefaultPrim(root.GetPrim())
-    for index, (vertices, triangles) in enumerate(meshes):
-        mesh = UsdGeom.Mesh.Define(stage, f"/{root_name}/Mesh_{index}")
+    def add_mesh(prim_path: str, vertices: np.ndarray, triangles: np.ndarray) -> UsdGeom.Mesh:
+        mesh = UsdGeom.Mesh.Define(stage, prim_path)
         mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(np.asarray(vertices, dtype=np.float32)))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray.FromNumpy(np.full(len(triangles), 3, dtype=np.int32)))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(np.asarray(triangles, dtype=np.int32).reshape(-1)))
         mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
         mesh.CreateDoubleSidedAttr(True)
+        return mesh
+
+    for index, (vertices, triangles) in enumerate(meshes):
+        mesh = add_mesh(f"/{root_name}/Mesh_{index}", vertices, triangles)
+        if collision_meshes is None:
+            UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+            UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.none)
+    if collision_meshes is not None:
+        UsdGeom.Scope.Define(stage, f"/{root_name}/Collision")
+        for index, (vertices, triangles) in enumerate(collision_meshes):
+            mesh = add_mesh(f"/{root_name}/Collision/Part_{index}", vertices, triangles)
+            mesh.CreatePurposeAttr(UsdGeom.Tokens.guide)
+            mesh.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+            UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+            UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
     stage.GetRootLayer().Save()
 
 
-def object_meshes(xml_path: Path, basis: np.ndarray, scale: float) -> list[tuple[np.ndarray, np.ndarray]]:
+def write_usd_atomic(
+    path: Path,
+    root_name: str,
+    meshes: list[tuple[np.ndarray, np.ndarray]],
+    collision_meshes: list[tuple[np.ndarray, np.ndarray]] | None = None,
+) -> None:
+    """Use the same authoring path for new and regenerated canonical assets."""
+    temporary = path.with_name(path.stem + ".tmp.usd")
+    try:
+        temporary.unlink(missing_ok=True)
+        make_usd(temporary, root_name, meshes, collision_meshes)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def has_separate_convex_collision(path: Path, part_count: int) -> bool:
+    stage = Usd.Stage.Open(str(path))
+    if stage is None:
+        return False
+    root = stage.GetDefaultPrim()
+    if not root:
+        return False
+    collision = root.GetChild("Collision")
+    if not collision:
+        return False
+    parts = [prim for prim in collision.GetChildren() if prim.IsA(UsdGeom.Mesh)]
+    if len(parts) != part_count:
+        return False
+    return all(
+        prim.HasAPI(UsdPhysics.CollisionAPI)
+        and UsdPhysics.MeshCollisionAPI(prim).GetApproximationAttr().Get() == UsdPhysics.Tokens.convexHull
+        and UsdGeom.Imageable(prim).ComputePurpose() == UsdGeom.Tokens.guide
+        for prim in parts
+    )
+
+
+def object_meshes(xml_path: Path, basis: np.ndarray, scale: float, group: str = "2") -> list[tuple[np.ndarray, np.ndarray]]:
     xml = ET.parse(xml_path).getroot()
     assets = {node.get("name"): node for node in xml.findall(".//asset/mesh")}
     out = []
     for geom in xml.findall(".//worldbody/body/geom"):
-        if geom.get("type") != "mesh" or geom.get("group") != "2":
+        if geom.get("type") != "mesh" or geom.get("group") != group:
             continue
         asset = assets[geom.get("mesh")]
         source = (xml_path.parent / asset.get("file")).resolve()
@@ -215,7 +276,7 @@ def object_meshes(xml_path: Path, basis: np.ndarray, scale: float) -> list[tuple
         vertices = (vertices + geom_pos) @ basis.T * scale
         out.append((vertices, np.asarray(mesh.faces, dtype=np.int32)))
     if not out:
-        raise ValueError(f"No visual mesh geoms in {xml_path}")
+        raise ValueError(f"No group={group} mesh geoms in {xml_path}")
     return out
 
 
@@ -232,9 +293,19 @@ def make_scene(model: mujoco.MjModel, result, frame_ids: np.ndarray, fps: float,
         if not xml_path.is_file():
             raise FileNotFoundError(xml_path)
         pos, rot, basis = object_pose(csv_path, frame_ids, result)
-        usd_path = usd_dir / "objects" / source_dir.name / f"{name}.usda"
-        if not usd_path.exists():
-            make_usd(usd_path, "Object", object_meshes(xml_path, basis, scale))
+        usd_path = usd_dir / "objects" / source_dir.name / f"{name}.usd"
+        xml = ET.parse(xml_path).getroot()
+        collision_count = sum(
+            geom.get("type") == "mesh" and geom.get("group") == "3"
+            for geom in xml.findall(".//worldbody/body/geom")
+        )
+        if collision_count == 0:
+            raise ValueError(f"OMOMO XML has no CoACD collision meshes: {xml_path}")
+        if not usd_path.exists() or not has_separate_convex_collision(usd_path, collision_count):
+            write_usd_atomic(
+                usd_path, "Object", object_meshes(xml_path, basis, scale, "2"),
+                object_meshes(xml_path, basis, scale, "3"),
+            )
         entities.append({
             "entity_id": name, "entity_type": "object", "usd_asset": usd_path.relative_to(root).as_posix(),
             "usd_prim_path": "/Object", "pose_pos": pos, "pose_rot": rot,
@@ -250,7 +321,7 @@ def make_scene(model: mujoco.MjModel, result, frame_ids: np.ndarray, fps: float,
         half_x, half_y = map(float, model.geom_size[i, :2])
         if half_x <= 0 or half_y <= 0:
             continue
-        usd_path = usd_dir / "terrain" / f"{name}_{half_x:g}_{half_y:g}.usda"
+        usd_path = usd_dir / "terrain" / f"{name}_{half_x:g}_{half_y:g}.usd"
         if not usd_path.exists():
             points = np.asarray([[-half_x, -half_y, 0], [half_x, -half_y, 0],
                                  [half_x, half_y, 0], [-half_x, half_y, 0]], dtype=np.float32)

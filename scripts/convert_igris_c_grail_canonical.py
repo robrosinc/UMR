@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pickle
 from pathlib import Path
 
 import mujoco
 import numpy as np
+import trimesh
 from pxr import Gf, Usd, UsdGeom
 from scipy.spatial.transform import Rotation
 
-from convert_igris_c_omomo_canonical import as_wxyz_rotation, make_motion, make_usd, scalar
+from convert_igris_c_omomo_canonical import (
+    as_wxyz_rotation, has_separate_convex_collision, make_motion, make_usd, scalar, write_usd_atomic,
+)
 from humanoid_retarget_pipeline_hsi_hoi import load_grail_pickle
 
 
@@ -79,6 +83,36 @@ def usd_meshes(path: Path, scale: float) -> list[tuple[np.ndarray, np.ndarray]]:
     return meshes
 
 
+def coacd_parts(recon_path: Path, result, usd_source: Path) -> list[Path]:
+    directory = Path(str(scalar(result, "source_object_dir", ""))).expanduser().resolve()
+    metadata_path = directory / "metadata.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"GRAIL CoACD metadata missing: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    count = int(metadata.get("collision_parts", 0))
+    if count <= 0 or metadata.get("sequence_key") != recon_path.stem:
+        raise ValueError(f"GRAIL CoACD metadata does not match {recon_path}: {metadata_path}")
+    if Path(str(metadata.get("source_usd", ""))).resolve() != usd_source.resolve():
+        raise ValueError(f"GRAIL CoACD source USD does not match: {metadata_path}")
+    parts = [directory / f"grail_object_collision_{index}.obj" for index in range(count)]
+    for part in parts:
+        if not part.is_file():
+            raise FileNotFoundError(f"GRAIL CoACD collision part missing: {part}")
+    return parts
+
+
+def coacd_meshes(parts: list[Path], scale: float) -> list[tuple[np.ndarray, np.ndarray]]:
+    meshes = []
+    for part in parts:
+        mesh = trimesh.load(part, force="mesh", process=False)
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int32)
+        if vertices.ndim != 2 or vertices.shape[1] != 3 or faces.ndim != 2 or faces.shape[1] != 3 or not len(faces):
+            raise ValueError(f"Invalid GRAIL CoACD mesh: {part}")
+        meshes.append(((vertices * scale).astype(np.float32), faces))
+    return meshes
+
+
 def object_pose(recon_path: Path, frame_ids: np.ndarray, result) -> tuple[np.ndarray, np.ndarray]:
     obj_data = load_grail_pickle(recon_path).get("obj_data", {})
     positions = np.asarray(obj_data["obj_t"], dtype=np.float64).reshape(-1, 3)
@@ -111,9 +145,15 @@ def make_scene(model: mujoco.MjModel, result, frame_ids: np.ndarray, fps: float,
     prim_name = "Terrain" if is_terrain else "Object"
     mesh_scale = 1.0 if options.object_size == "original" else float(scalar(result, "smpl_scale", 1))
     asset_group = "terrain" if is_terrain else "objects"
-    usd_path = options.usd_dir / asset_group / options.object_size / subset_root.name / f"{recon_path.stem}.usda"
-    if not usd_path.exists():
-        make_usd(usd_path, prim_name, usd_meshes(usd_source, mesh_scale))
+    usd_path = options.usd_dir / asset_group / options.object_size / subset_root.name / f"{recon_path.stem}.usd"
+    parts = coacd_parts(recon_path, result, usd_source)
+    if not usd_path.exists() or not has_separate_convex_collision(usd_path, len(parts)):
+        source_stage = Usd.Stage.Open(str(usd_source))
+        if source_stage is None:
+            raise ValueError(f"Cannot open GRAIL USD: {usd_source}")
+        unit_scale = float(UsdGeom.GetStageMetersPerUnit(source_stage))
+        collision_meshes = coacd_meshes(parts, unit_scale * mesh_scale)
+        write_usd_atomic(usd_path, prim_name, usd_meshes(usd_source, mesh_scale), collision_meshes)
     pos, rot = object_pose(recon_path, frame_ids, result)
     static = bool(np.allclose(pos, pos[0], atol=1e-5) and np.allclose(rot, rot[0], atol=1e-5))
     if is_terrain and not static:
@@ -140,7 +180,7 @@ def make_scene(model: mujoco.MjModel, result, frame_ids: np.ndarray, fps: float,
         half_x, half_y = map(float, model.geom_size[index, :2])
         if half_x <= 0 or half_y <= 0:
             continue
-        floor_path = options.usd_dir / "terrain" / f"{name}_{half_x:g}_{half_y:g}.usda"
+        floor_path = options.usd_dir / "terrain" / f"{name}_{half_x:g}_{half_y:g}.usd"
         if not floor_path.exists():
             points = np.asarray([[-half_x, -half_y, 0], [half_x, -half_y, 0],
                                  [half_x, half_y, 0], [-half_x, half_y, 0]], dtype=np.float32)

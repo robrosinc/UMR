@@ -138,6 +138,10 @@ Record 리스트 순서는 clip 내내 고정한다. Record 형식은 object와 
 ### USD mesh 및 transform 규칙
 
 - USD는 형상과 형상에 속하는 정적 정보를 담는다. Mesh topology, vertex, material, 로컬 transform 및 필요하면 collision용 geometry를 USD asset에 둔다. 프레임별 이동/회전은 pickle의 pose track에 둔다.
+- GRAIL 변환기는 원본 USD Mesh를 visual로 유지하고, retargeting에 쓰인 `object_mjcf`의 CoACD 분할 OBJ를 별도의 숨겨진 `/Object/Collision/Part_*` 또는 `/Terrain/Collision/Part_*` Mesh로 저장한다. 각 충돌 part에는 `PhysicsCollisionAPI`, `PhysicsMeshCollisionAPI`, `physics:approximation=convexHull`을 기록한다. Viser는 충돌 전용 Mesh를 그리지 않는다.
+- OMOMO 변환기는 XML의 visual `group=2` Mesh와 미리 생성된 CoACD `group=3` OBJ를 분리해 저장한다. Visual Mesh에는 충돌 API를 붙이지 않고, 각 CoACD OBJ를 숨겨진 `/Object/Collision/Part_*` Mesh로 저장해 `PhysicsCollisionAPI`, `PhysicsMeshCollisionAPI`, `physics:approximation=convexHull`을 기록한다. USD 변환 중 CoACD를 다시 실행하지 않는다. MuJoCo 평면에서 생성한 terrain은 visual과 충돌에 같은 두 삼각형 Mesh를 사용하며 `physics:approximation=none`이다. Canonical USD에는 `RigidBodyAPI`를 기록하지 않는다.
+- OMOMO `objects_manifest.json`은 object ID별 `usd_path`, `usd_prim_path`, `clips`를 기록한다. 각 clip은 `motion_path`, `scene_track_path`, `entity_id`를 가지며, 프레임별 object pose는 scene track에만 저장한다. 최상위 `motions`는 canonical motion PKL 상대 경로 목록이다.
+- ROBROS_LAB의 일반 motion loader는 이 manifest의 `motions` 목록을 읽을 수 있다. `objects`와 `scene_track_path`를 사용해 USD를 배치하고 프레임별 pose를 적용하는 소비자 코드는 별도로 필요하다.
 - `usd_prim_path`는 asset 내부의 안정된 root prim이어야 한다. pose를 적용할 때 해당 prim의 USD 내부 transform을 보존하면서 entity pose를 바깥 월드 transform으로 적용한다. 프레임별 pose를 USD animation과 pickle 양쪽에 중복 기록하지 않는다.
 - 여러 mesh/prim으로 구성된 하나의 물체나 terrain은 하나의 USD root prim 아래에 묶고 하나의 pose track으로 표현한다. 별도로 움직이는 구성 요소는 각각 entity record로 나눈다.
 - asset 경로는 dataset 내에서 재현 가능하게 해석되어야 한다. 파일을 찾을 수 없는 절대 경로, DCC 프로그램 전용 참조, 외부 네트워크 URL은 canonical 데이터에 사용하지 않는다. USD의 외부 reference/texture도 asset과 함께 배포하고 상대 경로로 유지한다.
