@@ -33,7 +33,7 @@ from humanoid_retarget_pipeline_hsi_hoi import (  # noqa: E402
 from obj2mjcf.cli import CoacdArgs, decompose_convex  # noqa: E402
 
 
-ASSET_VERSION = 3
+ASSET_VERSION = 4
 
 
 def parse_args():
@@ -260,14 +260,10 @@ def _convert_sequence_unlocked(recon_path: Path, args, coacd_args: CoacdArgs) ->
     sequence_dir.mkdir(parents=True, exist_ok=True)
     payload = load_grail_pickle(recon_path)
     obj_data = payload.get("obj_data", {})
-    object_scale = np.asarray(obj_data.get("obj_scale", np.ones(3)), dtype=np.float64).reshape(-1)
-    if object_scale.size == 1:
-        object_scale = np.repeat(object_scale, 3)
-    object_scale = object_scale[:3]
     usd_path = args.data_root / "object_usd" / f"{stem}.usd"
     visual_obj = sequence_dir / "grail_object.obj"
     texture_path = texture_for_sequence(args.data_root, stem)
-    export_grail_usd_obj(usd_path, visual_obj, texture_path, object_scale)
+    export_grail_usd_obj(usd_path, visual_obj, texture_path)
     texture_name = localize_texture(visual_obj, texture_path)
 
     mesh = trimesh.load(visual_obj, force="mesh", process=True)

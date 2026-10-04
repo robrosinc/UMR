@@ -44,8 +44,8 @@ from hiphi_layout import resolve_hiphi_objects  # noqa: E402
 
 DEFAULTS_CONFIG = ROOT / "humanoid_retarget_defaults_hsi_hoi_standard.json"
 DEFAULT_ROBOT_CONFIG = ROOT / "robot_configs" / "humanoid_retarget_unitree_g1_example.json"
-GRAIL_OBJECT_ASSET_VERSION = "3"
-GRAIL_CONVEX_MJCF_VERSION = 3
+GRAIL_OBJECT_ASSET_VERSION = "4"
+GRAIL_CONVEX_MJCF_VERSION = 4
 
 
 def parse_args():
@@ -545,7 +545,6 @@ def export_grail_usd_obj(
     usd_path: Path,
     obj_path: Path,
     texture_path: Path | None,
-    object_scale: np.ndarray,
 ) -> None:
     try:
         from pxr import Usd, UsdGeom  # noqa: WPS433
@@ -569,7 +568,7 @@ def export_grail_usd_obj(
         matrix = np.asarray(xform_cache.GetLocalToWorldTransform(prim), dtype=np.float64)
         points = np.concatenate([points, np.ones((len(points), 1))], axis=1) @ matrix.T
         points = points[:, :3]
-        points *= np.asarray(object_scale, dtype=np.float64).reshape(1, 3)
+        # GRAIL USD vertices already contain obj_data.obj_scale in meter units.
         counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get(), dtype=np.int64)
         indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), dtype=np.int64)
         st = UsdGeom.PrimvarsAPI(prim).GetPrimvar("st")
@@ -724,11 +723,7 @@ def prepare_grail_object_assets(
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = load_grail_pickle(sequence_path)
     obj_data = payload.get("obj_data", {})
-    object_scale = np.asarray(obj_data.get("obj_scale", np.ones(3)), dtype=np.float64).reshape(-1)
-    if object_scale.size == 1:
-        object_scale = np.repeat(object_scale, 3)
-    object_scale = object_scale[:3]
-    export_grail_usd_obj(usd_path, obj_path, texture_path, object_scale)
+    export_grail_usd_obj(usd_path, obj_path, texture_path)
     xml_path.write_text(
         "<mujoco model=\"grail_object\">\n"
         "  <asset><mesh name=\"grail_object_mesh\" file=\"grail_object.obj\"/></asset>\n"
