@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import pickle
 import xml.etree.ElementTree as ET
@@ -361,6 +362,59 @@ def convert(path: Path, options: argparse.Namespace) -> None:
     print(f"{path.name}: {len(qpos)} frames, {len(scene['scene_entities'])} entities")
 
 
+def write_object_manifest(root: Path, motion_dir: Path, scene_dir: Path, usd_dir: Path) -> None:
+    """Index every converted object and its scene track after a conversion run."""
+    scene_paths = sorted(scene_dir.glob("*.pkl"))
+    if not scene_paths:
+        raise FileNotFoundError(f"No scene tracks in {scene_dir}")
+    object_root = usd_dir / "objects"
+    objects: dict[str, dict] = {}
+    motions = []
+    for scene_path in scene_paths:
+        motion_path = motion_dir / scene_path.name
+        if not motion_path.is_file():
+            raise FileNotFoundError(motion_path)
+        motion_rel = motion_path.relative_to(root).as_posix()
+        scene_rel = scene_path.relative_to(root).as_posix()
+        motions.append(motion_rel)
+        with scene_path.open("rb") as handle:
+            scene = pickle.load(handle)
+        for entity in scene.get("scene_entities", []):
+            if entity["entity_type"] != "object":
+                continue
+            usd_path = (root / entity["usd_asset"]).resolve()
+            if not usd_path.is_relative_to(object_root) or usd_path.suffix != ".usd" or not usd_path.is_file():
+                raise ValueError(f"Invalid canonical object USD in {scene_path}: {usd_path}")
+            object_id = usd_path.relative_to(object_root).with_suffix("").as_posix()
+            usd_rel = usd_path.relative_to(root).as_posix()
+            asset = objects.setdefault(object_id, {
+                "usd_path": usd_rel,
+                "usd_prim_path": str(entity["usd_prim_path"]),
+                "clips": [],
+            })
+            if asset["usd_path"] != usd_rel or asset["usd_prim_path"] != entity["usd_prim_path"]:
+                raise ValueError(f"Conflicting object asset mapping: {object_id}")
+            asset["clips"].append({
+                "motion_path": motion_rel,
+                "scene_track_path": scene_rel,
+                "entity_id": str(entity["entity_id"]),
+            })
+    payload = {
+        "schema_version": 1,
+        "pose_source": "scene_tracks",
+        "objects": {key: objects[key] for key in sorted(objects)},
+        "motions": motions,
+    }
+    output = root / "objects_manifest.json"
+    temporary = output.with_name(output.name + ".tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print(f"{output}: {len(objects)} objects, {len(motions)} motions")
+
+
 def main() -> None:
     options = args()
     source = options.input.expanduser().resolve()
@@ -371,6 +425,7 @@ def main() -> None:
         files = files[:options.limit]
     for path in files:
         convert(path, options)
+    write_object_manifest(options.output_root, options.motion_dir, options.scene_dir, options.usd_dir)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,8 @@ def _load_usd_meshes(path: Path, prim_path: str) -> list[tuple[np.ndarray, np.nd
     for prim in Usd.PrimRange(root_prim):
         if not prim.IsA(UsdGeom.Mesh):
             continue
+        if UsdGeom.Imageable(prim).ComputePurpose() == UsdGeom.Tokens.guide:
+            continue
         vertices, faces = _triangulate_mesh(UsdGeom.Mesh(prim))
         mesh_to_root = xforms.GetLocalToWorldTransform(prim) * world_to_root
         vertices = np.asarray(
