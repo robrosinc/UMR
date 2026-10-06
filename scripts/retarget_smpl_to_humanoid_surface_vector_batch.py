@@ -14,6 +14,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from scipy.ndimage import gaussian_filter1d, percentile_filter
 
 try:
     from tqdm import tqdm
@@ -1488,7 +1489,7 @@ def solve_frame_body_segment_qp(
 
 
 def estimate_ground_z_stream(sequence, frame_ids, args, source_joint_names=None, soma_usd_path=None, source_model_type="smplx"):
-    if str(args.source_ground_align) == "none":
+    if str(args.source_ground_align) in {"none", "adaptive_foot_joint"}:
         return 0.0
     if str(args.source_ground_align) != "global_foot_joint":
         raise ValueError(f"Unsupported source_ground_align={args.source_ground_align!r}")
@@ -1527,6 +1528,68 @@ def estimate_ground_z_stream(sequence, frame_ids, args, source_joint_names=None,
     if ground_z >= float(args.mat_height):
         ground_z -= float(args.mat_height)
     return ground_z
+
+
+def align_smplx_sequence_to_contact_ground(sequence, frame_ids, args):
+    """Remove slow floor-height drift using planted feet, preserving flight arcs."""
+    if sequence.get("source_format") != "smplx_npz" or sequence.get("output_up", "z") != "z":
+        raise ValueError("adaptive_foot_joint requires a Z-up SMPL-X NPZ motion")
+
+    foot_ids = [common.SMPLX_JOINT_IDS["L_Foot"], common.SMPLX_JOINT_IDS["R_Foot"]]
+    foot_chunks = []
+    surface_min_chunks = []
+    chunk_size = max(1, min(int(args.stream_chunk_frames or 128), 128))
+    for start in range(0, len(frame_ids), chunk_size):
+        chunk_ids = frame_ids[start : start + chunk_size]
+        vertices, joints, _faces = common.source_motion_vertices_joints(
+            sequence,
+            chunk_ids,
+            args.smplx_model_dir,
+            batch_size=min(int(args.batch_size), len(chunk_ids)),
+            smplx_device=args.smplx_device,
+            smplx_batch_size=args.smplx_batch_size,
+            smplx_batch_size_max=args.smplx_batch_size_max,
+            smplx_batch_size_safety_factor=args.smplx_batch_size_safety_factor,
+        )
+        joints = common.source_points_to_retarget_frame(joints, "smplx", sequence.get("output_up", "z"))
+        vertices = common.source_points_to_retarget_frame(vertices, "smplx", sequence.get("output_up", "z"))
+        foot_chunks.append(joints[:, foot_ids, :])
+        surface_min_chunks.append(vertices[:, :, 2].min(axis=1))
+
+    feet = np.concatenate(foot_chunks, axis=0)
+    surface_min_z = np.concatenate(surface_min_chunks)
+    lower_foot = np.argmin(feet[:, :, 2], axis=1)
+    rows = np.arange(len(frame_ids))
+    foot_z = feet[rows, lower_foot, 2]
+    times = np.asarray(frame_ids, dtype=np.float64) / float(sequence["fps"])
+    foot_speed = (
+        np.linalg.norm(np.gradient(feet, times, axis=0), axis=2)[rows, lower_foot]
+        if len(frame_ids) >= 3
+        else np.full(len(frame_ids), np.inf)
+    )
+    sample_fps = 1.0 / float(np.median(np.diff(times))) if len(frame_ids) >= 2 else float(sequence["fps"])
+    window = max(3, int(round(sample_fps)) | 1)
+    local_floor = percentile_filter(foot_z, 20, size=window, mode="nearest")
+    planted = (foot_speed < 0.25) & (foot_z <= local_floor + 0.02) & (foot_z - surface_min_z < 0.06)
+    anchors = np.flatnonzero(planted)
+    use_adaptive = len(anchors) >= max(3, int(np.ceil(0.05 * len(frame_ids))))
+    if use_adaptive:
+        ground_shift = np.interp(rows, anchors, foot_z[anchors])
+        ground_shift = gaussian_filter1d(ground_shift, sigma=max(1.0, sample_fps * 0.08))
+    else:
+        ground_z = float(foot_z.min())
+        if ground_z >= float(args.mat_height):
+            ground_z -= float(args.mat_height)
+        ground_shift = np.full(len(frame_ids), ground_z, dtype=np.float64)
+    trans = np.asarray(sequence["trans_orig"], dtype=np.float32).copy()
+    trans[np.asarray(frame_ids, dtype=np.int64), 2] -= ground_shift.astype(np.float32)
+    sequence["trans_orig"] = trans
+    print(
+        f"[HumanoidRetarget][AdaptiveGround] mode={'adaptive' if use_adaptive else 'global_fallback'} "
+        f"planted={len(anchors)}/{len(frame_ids)} "
+        f"shift_start={ground_shift[0]:.4f} shift_end={ground_shift[-1]:.4f}",
+        flush=True,
+    )
 
 
 def source_slots_and_normals_for_vertices(vertices_scaled, template_faces, source_binding):
@@ -1643,7 +1706,7 @@ def save_source_feature_cache(
         source_up = sequence.get("output_up", "z")
         vertices_world = common.source_points_to_retarget_frame(vertices_world, source_model_type, source_up)
         joints_world = common.source_points_to_retarget_frame(joints_world, source_model_type, source_up)
-        if str(args.source_ground_align) != "none":
+        if str(args.source_ground_align) == "global_foot_joint":
             min_toe_z = min(min_toe_z, float(joints_world[:, toe_ids, 2].min()))
         vertices_scaled = vertices_world * float(smpl_scale)
         joints_scaled = joints_world * float(smpl_scale)
@@ -1671,7 +1734,7 @@ def save_source_feature_cache(
             flush=True,
         )
 
-    ground_z = 0.0 if str(args.source_ground_align) == "none" else float(min_toe_z)
+    ground_z = float(min_toe_z) if str(args.source_ground_align) == "global_foot_joint" else 0.0
     if ground_z >= float(args.mat_height):
         ground_z -= float(args.mat_height)
     source_slots = np.concatenate(slot_chunks, axis=0)
@@ -1877,6 +1940,8 @@ def main(argv=None):
     frame_ids = common.slice_frames(total_frames, args.start, args.end, args.stride, args.max_frames)
     fps = float(sequence.get("fps", 30)) / max(1, int(args.stride))
     source_format = str(sequence.get("source_format", source_format))
+    if str(args.source_ground_align) == "adaptive_foot_joint":
+        align_smplx_sequence_to_contact_ground(sequence, frame_ids, args)
     print(
         f"[HumanoidRetarget] source={args.data} format={source_format} "
         f"seq={seq_key} frames={len(frame_ids)} fps={fps:.3f}"

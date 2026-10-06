@@ -220,6 +220,43 @@ python scripts/humanoid_retarget_pipeline_batch.py \
   --batch-config humanoid_retarget_defaults_batch.json
 ```
 
+### AMASS height correction
+
+Retarget AMASS SMPL-X motions to IGRIS-C with:
+
+```bash
+bash scripts/humanoid_retarget_pipeline_batch_amass_igris_c.sh
+```
+
+The AMASS batch config selects `retarget.source_ground_align: "adaptive_foot_joint"`.
+This option is applied only to that batch; other motion sources retain their
+own ground settings. The runner uses `--force-retarget` so existing outputs are
+recomputed when it is run again.
+
+AMASS clips can have a changing vertical offset even during foot contact. A
+single offset based on the lowest foot joint in the entire clip leaves earlier
+contacts floating. The adaptive option corrects the source motion before the
+normal retarget solver runs:
+
+1. Evaluate the SMPL-X feet and mesh for the selected frames. A foot is a
+   contact candidate when its speed is below 0.25 m/s, its height is within
+   2 cm of the local 20th-percentile foot height (about a one-second window),
+   and it is within 6 cm of the mesh's lowest point. The last condition avoids
+   treating raised feet as contacts in lying or crawling motions.
+2. Interpolate the candidate foot heights across frames, smooth them over
+   about 80 ms, and subtract that height from the source root translation.
+   Between contacts, this continues the estimated floor offset without
+   forcing the feet down during a jump.
+3. If fewer than 5% of frames have usable foot contacts, use the previous
+   single-offset method for that clip.
+
+This does not directly snap robot feet to the floor. It fixes the source height
+used by the existing surface correspondence, ground-contact costs, and hard
+ground-penetration constraint. Real airborne portions of a motion remain
+airborne. For `A14_-_stand_to_skip_stageii`, the robot's foot-bottom median in
+the first 120 frames fell from about 5.6 cm above the floor to approximately
+zero in a full-clip test.
+
 BONES-SEED uses its own batch defaults:
 
 ```bash

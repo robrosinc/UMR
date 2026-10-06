@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--motion-inventory", type=Path, default=None, help="Reuse all motion-to-template assignments from a correspondence_summary.json.")
     parser.add_argument("--pattern", action="append", default=None, help="Motion file glob. Can be passed more than once.")
     parser.add_argument("--recursive", action="store_true", default=None)
+    parser.add_argument("--skip-invalid-npz", action="store_true", help="Skip NPZ files with invalid ZIP structure.")
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--correspondence-workers", type=int, default=None)
     parser.add_argument("--retarget-cpu-threads", type=int, default=None, help="OpenMP/BLAS threads allowed per retarget worker.")
@@ -863,6 +864,14 @@ def main():
             recursive,
             include_flat_smplx_dirs=include_flat_smplx_dirs,
         )
+    if args.skip_invalid_npz:
+        valid_motions = []
+        for motion_file in motions:
+            if motion_file.suffix.lower() == ".npz" and not zipfile.is_zipfile(motion_file):
+                print(f"[BatchRetarget][skip-invalid-npz] {motion_file}", flush=True)
+                continue
+            valid_motions.append(motion_file)
+        motions = valid_motions
     if args.limit and int(args.limit) > 0:
         motions = motions[: int(args.limit)]
     if not motions and not preloaded_template_configs:

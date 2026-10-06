@@ -1,0 +1,40 @@
+{
+  "batch": {
+    "motion_folder": "/home/robros/workspace/motion_datas/AMASS-smplx",
+    "patterns": ["*stageii.npz"],
+    "recursive": true,
+    "workers": 8,
+    "correspondence_workers": 1,
+    "output_root": "output/igris_c_amass",
+    "skip_existing": true,
+    "compact_log": true,
+    "progress_bars": true,
+    "tail_lines_on_error": 80
+  },
+  "motion": {
+    "start": 0,
+    "end": -1,
+    "stride": 1,
+    "max_frames": 0
+  },
+  "smpl_template": {
+    "use_betas": false,
+    "use_gender": true
+  },
+  "correspondence": {
+    "dataset": {
+      "smpl_models": [
+        {"type": "smplx", "dir": "smpl", "genders": ["neutral", "female", "male"]}
+      ]
+    }
+  },
+  "solver": {
+    "trajectory_warm_start_mode": "bidirectional",
+    "trajectory_warm_start_bidirectional_continuity_cost": 0.1,
+    "trajectory_warm_start_bidirectional_switch_cost": 0.01
+  },
+  "retarget": {
+    "stream_chunk_frames": 300,
+    "source_ground_align": "adaptive_foot_joint"
+  }
+}

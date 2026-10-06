@@ -1,13 +1,40 @@
 # LAFAN1 / SMPL-X adapter
 
-UMR consumes a surface-producing SMPL-X sequence, not the original LAFAN1 BVH
-directly. Download motion from the
+UMR consumes a surface-producing SMPL-X sequence rather than the original
+LAFAN1 BVH directly. Download motion from the
 [LAFAN1 repository](https://github.com/ubisoft/ubisoft-laforge-animation-dataset)
-and convert it to SMPL-X locally. LAFAN1 is licensed under
+and convert it to SMPL-X locally with the included script. LAFAN1 is licensed under
 [CC BY-NC-ND 4.0](https://github.com/ubisoft/ubisoft-laforge-animation-dataset/blob/master/license.txt).
 This repository includes one converted sequence, `dance1_subject2.npz`. The
-[`lafan_to_smplx`](https://github.com/jaraujo98/lafan_to_smplx) workflow from
-GMR provides one compatible local conversion route.
+converter's joint mapping and shape coefficients follow the MIT-licensed
+[`lafan_to_smplx`](https://github.com/jaraujo98/lafan_to_smplx) workflow.
+
+## Convert BVH files
+
+Place the neutral SMPL-X body model at `smpl/SMPLX_NEUTRAL.pkl`. With the
+original BVH files under `/home/robros/workspace/motion_datas/lafan1/`, run:
+
+```bash
+bash scripts/convert_lafan1_to_umr.sh
+```
+
+The script converts each `*.bvh` in that directory into a same-named `.npz`
+under `sample_data/lafan1_smplx/`. It keeps the source frame count and frame
+rate and skips existing `.npz` files, including the bundled example. To
+convert one file, choose a different output directory, or change the batch
+size:
+
+```bash
+bash scripts/convert_lafan1_to_umr.sh /path/to/clip.bvh /path/to/output --batch-size 32
+```
+
+Use `--overwrite` to replace existing output, `--limit N` to convert the first
+N source files, or `--plan` to list the selected and pending file counts.
+The script selects CUDA when available; use `--device cpu` to force CPU.
+Set `PYTHON_BIN` to use another Python environment with NumPy, SciPy, PyTorch,
+and `smplx` installed. The Python entry point is
+`scripts/convert_lafan1_to_umr.py` and accepts the same options with named
+`--input` and `--output` paths.
 
 ## UMR layout
 
@@ -49,17 +76,25 @@ stem in the selected defaults or robot configuration.
 
 ## Batch retargeting
 
-The released batch defaults scan this directory non-recursively for `.npz`
-files and use `bidirectional` warm start with DP:
+The batch script scans this directory for converted `.npz` files and uses
+`bidirectional` warm start with DP:
 
 ```bash
-python scripts/humanoid_retarget_pipeline_batch.py \
-  --config robot_configs/humanoid_retarget_unitree_g1_example.json \
-  --batch-config humanoid_retarget_defaults_batch.json
+bash scripts/humanoid_retarget_pipeline_batch_lafan1_igris_c.sh
 ```
 
-Place additional converted sequences directly in this directory, or pass a
-different root with `--motion-folder`. Use `--recursive` when the converted
-files are organized in subdirectories. Batch results are stored under
-`output/batch_retarget/<robot-name>/`, and `batch_summary.json` records the
-status and output path of every clip.
+Set `WORKERS=8` to choose the retarget worker count. Extra command-line flags
+are forwarded to the batch pipeline, for example `--limit 1 --dry-run` or
+`--motion-folder /path/to/other/npz`. Results are stored under
+`output/igris_c_lafan1/igris_c/`, where `batch_summary.json` records the status
+and output path of every clip.
+
+## Convert retarget results to IGRIS-C canonical
+
+```bash
+bash scripts/convert_igris_c_lafan1_canonical.sh
+```
+
+This reads `output/igris_c_lafan1/igris_c/*.npz` and writes canonical motion
+PKLs, floor scene tracks and USD, and a bundled IGRIS-C robot model under
+`output/igris_c_lafan1_canonical/`. Pass `--limit 1` to convert one clip first.
