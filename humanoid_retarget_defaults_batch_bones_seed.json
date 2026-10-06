@@ -30,7 +30,7 @@
     "correspondence_workers": 8,
     "correspondence_devices": "auto",
     "correspondence_build_device": "cpu",
-    "retarget_gpus": "none",
+    "retarget_gpus": "0",
     "retarget_cpu_threads": 1,
     "output_root": "output/batch_retarget",
     "temp_config_root": null,
