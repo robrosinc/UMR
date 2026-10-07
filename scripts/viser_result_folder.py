@@ -183,7 +183,8 @@ def _install_result_dropdown_scrollbar(server, dropdown_uuid: str) -> None:
     )
 
 
-def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, scan_results=scan_result_files) -> None:
+def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
+                            scan_results=scan_result_files, result_dirs: dict[str, Path] | None = None) -> None:
     """Serve a Viser browser that can refresh and switch batch results."""
     try:
         import viser
@@ -194,6 +195,12 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, sc
         ) from exc
 
     result_dir = Path(result_dir).expanduser().resolve(strict=False)
+    result_dirs = {
+        label: Path(path).expanduser().resolve(strict=False)
+        for label, path in (result_dirs or {}).items()
+    }
+    if result_dirs and result_dir not in result_dirs.values():
+        raise ValueError("Initial result directory must be one of the public directories.")
     with contextlib.redirect_stdout(io.StringIO()):
         server = viser.ViserServer(
             host=str(args.viser_host),
@@ -270,6 +277,13 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, sc
     )
     server.gui.add_markdown("**Results**")
     with server.gui.add_folder(None):
+        folder_dropdown = (
+            server.gui.add_dropdown(
+                "Directory", tuple(result_dirs),
+                initial_value=next(label for label, path in result_dirs.items() if path == result_dir),
+            )
+            if result_dirs else None
+        )
         result_dropdown = server.gui.add_dropdown("Result clip", (EMPTY_OPTION,), disabled=True)
         refresh_button = server.gui.add_button("Refresh")
         previous_clip_button = server.gui.add_button("Previous 1 clip (←)", disabled=True)
@@ -749,6 +763,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, sc
             with state_lock:
                 unload_active()
                 set_clip_controls(False)
+                title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
                 status_markdown.content = (
                     "No results found. The viewer is ready; run batch retargeting, "
                     "then select **Refresh**."
@@ -797,6 +812,27 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str, sc
     @refresh_button.on_click
     def _refresh(event) -> None:
         refresh_results(event.client)
+
+    if folder_dropdown is not None:
+        @folder_dropdown.on_update
+        def _select_folder(event) -> None:
+            nonlocal result_dir
+            selected = result_dirs.get(str(folder_dropdown.value))
+            if selected is None or selected == result_dir:
+                return
+            with state_lock:
+                if state["loading"] or state["recording"] or state["record_stopping"]:
+                    current_label = next(label for label, path in result_dirs.items() if path == result_dir)
+                    folder_dropdown.value = current_label
+                    notify(event.client, "Viewer busy", "Wait for loading or recording to finish.")
+                    return
+                unload_active()
+                state["paths"] = []
+                state["label_to_path"] = {}
+                set_clip_controls(False)
+                result_dir = selected
+                title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
+            refresh_results(event.client)
 
     @result_dropdown.on_update
     def _select_result(event) -> None:

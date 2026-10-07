@@ -54,6 +54,14 @@ ALL_RETARGET_RESULTS = (
     ("booster_k1", ROOT / "output/booster_k1_retarget/smpl_motion_booster_k1.npz"),
     ("pipluspro", ROOT / "output/pipluspro_retarget/smpl_motion_pipluspro.npz"),
 )
+LAN_RESULT_DIRS = {
+    "Bones Seed": ROOT / "output/igris_c_bones_seed",
+    "LAFAN1": ROOT / "output/igris_c_lafan1",
+    "OMOMO Dummy": ROOT / "output/igris_c_omomo_dummy",
+    "AMASS": ROOT / "output/igris_c_amass",
+    "GRAIL": ROOT / "output/igris_c_grail",
+    "OmniContact": ROOT / "output/igris_c_omnicontact",
+}
 
 
 def parse_args():
@@ -66,6 +74,10 @@ def parse_args():
     parser.add_argument("--all-smpl-point-radius", type=float, default=0.004)
     parser.add_argument("--all-smpl-point-alpha", type=float, default=0.9)
     parser.add_argument("--result", type=Path, default=DEFAULT_RESULT, help="Saved retarget .npz.")
+    parser.add_argument(
+        "--lan-viewer", action="store_true",
+        help="Serve the code-defined result folders with a folder selector on the local network.",
+    )
     parser.add_argument(
         "--result-format",
         choices=("umr", "canonical"),
@@ -3522,6 +3534,11 @@ def prepare_canonical_viser_clip(args, result_path: Path) -> dict:
 
 def main():
     args = parse_args()
+    if args.lan_viewer:
+        if args.result_dir is not None or args.result_format != "umr":
+            raise ValueError("--lan-viewer uses its own UMR result folders; omit --result-dir and --result-format.")
+        args.result_dir = next(iter(LAN_RESULT_DIRS.values()))
+        args.viewer_backend = "viser"
     if args.result_format == "canonical" and args.result_dir is None:
         raise ValueError("--result-format canonical requires --result-dir pointing to the canonical dataset root.")
     if args.result_dir is not None:
@@ -3557,6 +3574,7 @@ def main():
             load_clip=load_clip,
             title=str(args.viser_label),
             scan_results=scan_results,
+            result_dirs=LAN_RESULT_DIRS if args.lan_viewer else None,
         )
         return
     if bool(args.all):
