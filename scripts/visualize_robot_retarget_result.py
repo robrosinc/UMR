@@ -404,9 +404,22 @@ def remap_legacy_path(path: Path) -> Path:
     return Path("..") / suffix
 
 
-def resolve_robot_xml_path(path: Path) -> Path:
+def relocated_repo_path(path: Path) -> Path:
+    """Resolve a saved path from another checkout when its repository data is present."""
+    if not path.is_absolute() or path.exists():
+        return path
+    parts = path.parts
+    for marker in ("assets", "sample_data"):
+        if marker in parts:
+            candidate = ROOT.joinpath(*parts[parts.index(marker) :])
+            if candidate.exists():
+                return candidate
+    return path
+
+
+def resolve_robot_xml_path(path: Path, result_path: Path | None = None) -> Path:
     remapped = remap_legacy_path(path)
-    candidates = [path, remapped]
+    candidates = [path, relocated_repo_path(path), remapped]
     if not path.is_absolute():
         candidates.extend([ROOT / path, ELEMENTS_ROOT / path])
     if remapped != path:
@@ -414,6 +427,17 @@ def resolve_robot_xml_path(path: Path) -> Path:
     for candidate in candidates:
         if candidate.exists():
             return candidate
+    if result_path is not None and path.name.endswith("_igris_c.floating_mjcf.xml"):
+        result_parts = Path(result_path).parts
+        source_xml = None
+        if "igris_c_omomo_dummy" in result_parts:
+            source_xml = ASSETS_ROOT / "igris_c/igris_c_dummy_hand.xml"
+        elif any(name in result_parts for name in (
+            "igris_c_bones_seed", "igris_c_lafan1", "igris_c_amass"
+        )):
+            source_xml = ASSETS_ROOT / "igris_c/igris_c.xml"
+        if source_xml is not None and source_xml.exists():
+            return source_xml
     return candidates[-1]
 
 
@@ -470,7 +494,7 @@ def normalize_patched_asset_paths(xml_text: str, xml_path: Path) -> str:
             continue
         file_path = Path(file_text)
         if file_path.is_absolute():
-            target = file_path
+            target = relocated_repo_path(file_path)
         elif file_path.parent == Path(".") and meshdir_base is not None:
             target = meshdir_base / file_path
         else:
@@ -482,7 +506,7 @@ def normalize_patched_asset_paths(xml_text: str, xml_path: Path) -> str:
             continue
         file_path = Path(file_text)
         if file_path.is_absolute():
-            target = file_path
+            target = relocated_repo_path(file_path)
         elif file_path.parent == Path(".") and texturedir_base is not None:
             target = texturedir_base / file_path
         else:
@@ -639,7 +663,7 @@ def resolve_source_data_dir(result) -> Path | None:
             continue
         source = Path(scalar_string(result[key]))
         remapped = remap_legacy_path(source)
-        candidates.extend([source, remapped])
+        candidates.extend([source, relocated_repo_path(source), remapped])
         if not source.is_absolute():
             candidates.extend([ROOT / source, ELEMENTS_ROOT / source])
         if remapped != source and not remapped.is_absolute():
@@ -655,7 +679,7 @@ def resolve_source_data_path(result) -> Path | None:
         return None
     source = Path(scalar_string(result["source_data"]))
     remapped = remap_legacy_path(source)
-    candidates = [source, remapped]
+    candidates = [source, relocated_repo_path(source), remapped]
     if not source.is_absolute():
         candidates.extend([ROOT / source, ELEMENTS_ROOT / source])
     if remapped != source and not remapped.is_absolute():
@@ -3364,7 +3388,8 @@ def prepare_viser_result_clip(args, result_path: Path) -> dict:
     try:
         result, qpos_all, saved_robot_xml, saved_fps = load_result(result_path)
         robot_xml = resolve_robot_xml_path(
-            args.robot_xml if args.robot_xml is not None else saved_robot_xml
+            args.robot_xml if args.robot_xml is not None else saved_robot_xml,
+            result_path=result_path if args.robot_xml is None else None,
         )
         if not robot_xml.exists():
             raise FileNotFoundError(f"Robot XML not found: {robot_xml}")
@@ -3582,7 +3607,10 @@ def main():
         return
 
     result, qpos_all, saved_robot_xml, saved_fps = load_result(args.result)
-    robot_xml = resolve_robot_xml_path(args.robot_xml if args.robot_xml is not None else saved_robot_xml)
+    robot_xml = resolve_robot_xml_path(
+        args.robot_xml if args.robot_xml is not None else saved_robot_xml,
+        result_path=args.result if args.robot_xml is None else None,
+    )
     if not robot_xml.exists():
         raise FileNotFoundError(f"Robot XML not found: {robot_xml}")
 
