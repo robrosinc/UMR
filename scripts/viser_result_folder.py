@@ -201,6 +201,9 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
     }
     if result_dirs and result_dir not in result_dirs.values():
         raise ValueError("Initial result directory must be one of the public directories.")
+    max_clients = int(getattr(args, "viewer_max_clients", 4))
+    if max_clients < 1:
+        raise ValueError("viewer_max_clients must be at least 1")
     with contextlib.redirect_stdout(io.StringIO()):
         server = viser.ViserServer(
             host=str(args.viser_host),
@@ -221,16 +224,6 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
         brand_color=(54, 76, 96),
     )
     server.scene.set_up_direction("+z")
-    world_handle = server.scene.add_frame("/world", show_axes=False)
-    server.scene.add_grid("/world/ground")
-    server.scene.add_light_ambient("/lights/ambient", color=(255, 255, 255), intensity=0.55)
-    server.scene.add_light_directional(
-        "/lights/key",
-        color=(255, 249, 235),
-        intensity=2.2,
-        position=(3.5, -4.5, 6.0),
-        cast_shadow=True,
-    )
 
     default_lookat = np.asarray([0.0, 0.0, 0.7], dtype=np.float64)
     default_position = _camera_position(
@@ -243,138 +236,153 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
     server.initial_camera.position = default_position
     server.initial_camera.up = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
 
-    state_lock = threading.RLock()
-    load_lock = threading.Lock()
-    render_lock = threading.Lock()
-    stop_event = threading.Event()
-    state = {
-        "active": None,
-        "paths": [],
-        "label_to_path": {},
-        "frame": 0,
-        "clip_jump_index": 0,
-        "playing": not bool(args.paused),
-        "speed": 1.0,
-        "loop": bool(args.loop),
-        "follow_camera": bool(args.lock_camera),
-        "camera_target": default_lookat.copy(),
-        "follow_anchor": default_lookat.copy(),
-        "world_offset": np.zeros(3, dtype=np.float64),
-        "camera_client": None,
-        "slider_write": False,
-        "selector_write": False,
-        "loading": False,
-        "generation": 0,
-        "recording": False,
-        "record_stopping": False,
-        "recorder": None,
-        "playback_clock_reset": False,
-    }
+    initial_result_dir = result_dir
 
-    title_markdown = server.gui.add_markdown(f"**{title}**  \nBatch folder: `{result_dir}`")
-    status_markdown = server.gui.add_markdown(
-        "No results found. The viewer is ready; run batch retargeting, then select **Refresh**."
-    )
-    server.gui.add_markdown("**Results**")
-    with server.gui.add_folder(None):
-        folder_dropdown = (
-            server.gui.add_dropdown(
-                "Directory", tuple(result_dirs),
-                initial_value=next(label for label, path in result_dirs.items() if path == result_dir),
+    def start_client_session(client):
+        result_dir = initial_result_dir
+        client.scene.set_up_direction("+z")
+        client.camera.position = default_position
+        client.camera.look_at = default_lookat
+        client.camera.up_direction = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+        world_handle = client.scene.add_frame("/world", show_axes=False)
+        client.scene.add_grid("/world/ground")
+        client.scene.add_light_ambient("/lights/ambient", color=(255, 255, 255), intensity=0.55)
+        client.scene.add_light_directional(
+            "/lights/key",
+            color=(255, 249, 235),
+            intensity=2.2,
+            position=(3.5, -4.5, 6.0),
+            cast_shadow=True,
+        )
+
+        state_lock = threading.RLock()
+        load_lock = threading.Lock()
+        render_lock = threading.Lock()
+        stop_event = threading.Event()
+        state = {
+            "active": None,
+            "paths": [],
+            "label_to_path": {},
+            "frame": 0,
+            "clip_jump_index": 0,
+            "playing": not bool(args.paused),
+            "speed": 1.0,
+            "loop": bool(args.loop),
+            "follow_camera": bool(args.lock_camera),
+            "camera_target": default_lookat.copy(),
+            "follow_anchor": default_lookat.copy(),
+            "world_offset": np.zeros(3, dtype=np.float64),
+            "camera_client": client,
+            "slider_write": False,
+            "selector_write": False,
+            "loading": False,
+            "generation": 0,
+            "recording": False,
+            "record_stopping": False,
+            "recorder": None,
+            "playback_clock_reset": False,
+        }
+
+        title_markdown = client.gui.add_markdown(f"**{title}**  \nBatch folder: `{result_dir}`")
+        status_markdown = client.gui.add_markdown(
+            "No results found. The viewer is ready; run batch retargeting, then select **Refresh**."
+        )
+        client.gui.add_markdown("**Results**")
+        with client.gui.add_folder(None):
+            folder_dropdown = (
+                client.gui.add_dropdown(
+                    "Directory", tuple(result_dirs),
+                    initial_value=next(label for label, path in result_dirs.items() if path == result_dir),
+                )
+                if result_dirs else None
             )
-            if result_dirs else None
-        )
-        result_dropdown = server.gui.add_dropdown("Result clip", (EMPTY_OPTION,), disabled=True)
-        refresh_button = server.gui.add_button("Refresh")
-        previous_clip_button = server.gui.add_button("Previous 1 clip (←)", disabled=True)
-        next_clip_button = server.gui.add_button("Next 1 clip (→)", disabled=True)
-        jump_down_button = server.gui.add_button("Jump ÷10 (PgDn)", disabled=True)
-        jump_up_button = server.gui.add_button("Jump ×10 (PgUp)")
-    _install_result_dropdown_scrollbar(server, str(result_dropdown._impl.uuid))
+            result_dropdown = client.gui.add_dropdown("Result clip", (EMPTY_OPTION,), disabled=True)
+            refresh_button = client.gui.add_button("Refresh")
+            previous_clip_button = client.gui.add_button("Previous 1 clip (←)", disabled=True)
+            next_clip_button = client.gui.add_button("Next 1 clip (→)", disabled=True)
+            jump_down_button = client.gui.add_button("Jump ÷10 (PgDn)", disabled=True)
+            jump_up_button = client.gui.add_button("Jump ×10 (PgUp)")
+        _install_result_dropdown_scrollbar(client, str(result_dropdown._impl.uuid))
 
-    server.gui.add_markdown("**Playback**")
-    with server.gui.add_folder(None):
-        play_button = server.gui.add_button("Play (Space)", disabled=True)
-        reset_button = server.gui.add_button("Reset (R)", disabled=True)
-        step_back_button = server.gui.add_button("Previous frame (A)", disabled=True)
-        step_forward_button = server.gui.add_button("Next frame (D)", disabled=True)
-        seek_back_button = server.gui.add_button("-1 second (Q)", disabled=True)
-        seek_forward_button = server.gui.add_button("+1 second (E)", disabled=True)
-        frame_slider = server.gui.add_slider("Frame", 0, 1, 1, 0, disabled=True)
-        speed_slider = server.gui.add_slider("Speed", 0.1, 4.0, 0.1, 1.0)
-        loop_checkbox = server.gui.add_checkbox("Loop", bool(args.loop))
+        client.gui.add_markdown("**Playback**")
+        with client.gui.add_folder(None):
+            play_button = client.gui.add_button("Play (Space)", disabled=True)
+            reset_button = client.gui.add_button("Reset (R)", disabled=True)
+            step_back_button = client.gui.add_button("Previous frame (A)", disabled=True)
+            step_forward_button = client.gui.add_button("Next frame (D)", disabled=True)
+            seek_back_button = client.gui.add_button("-1 second (Q)", disabled=True)
+            seek_forward_button = client.gui.add_button("+1 second (E)", disabled=True)
+            frame_slider = client.gui.add_slider("Frame", 0, 1, 1, 0, disabled=True)
+            speed_slider = client.gui.add_slider("Speed", 0.1, 4.0, 0.1, 1.0)
+            loop_checkbox = client.gui.add_checkbox("Loop", bool(args.loop))
 
-    server.gui.add_markdown("**View**")
-    with server.gui.add_folder(None):
-        camera_button = server.gui.add_button(
-            "Fixed camera (F): ON" if state["follow_camera"] else "Fixed camera (F): OFF",
-            color=CAMERA_ACTIVE_COLOR if state["follow_camera"] else None,
-            disabled=True,
-        )
-        com_checkbox = server.gui.add_checkbox("Robot CoM (ground)", bool(args.show_robot_com))
-
-    server.gui.add_markdown("**Capture**")
-    with server.gui.add_folder(None):
-        snapshot_button = server.gui.add_button("Snapshot (Ctrl/Cmd+P)", disabled=True)
-        record_button = server.gui.add_button("Record screen (Ctrl+V)", disabled=True)
-
-    clip_controls = (
-        play_button,
-        reset_button,
-        step_back_button,
-        step_forward_button,
-        seek_back_button,
-        seek_forward_button,
-        frame_slider,
-        camera_button,
-        snapshot_button,
-        record_button,
-    )
-
-    def notify(client, title_text: str, body: str, *, error: bool = False) -> None:
-        if client is not None:
-            client.add_notification(
-                title_text,
-                body,
-                auto_close=False if error else 3.0,
-                color=(170, 64, 64) if error else (54, 76, 96),
+        client.gui.add_markdown("**View**")
+        with client.gui.add_folder(None):
+            camera_button = client.gui.add_button(
+                "Fixed camera (F): ON" if state["follow_camera"] else "Fixed camera (F): OFF",
+                color=CAMERA_ACTIVE_COLOR if state["follow_camera"] else None,
+                disabled=True,
             )
+            com_checkbox = client.gui.add_checkbox("Robot CoM (ground)", bool(args.show_robot_com))
 
-    def set_clip_controls(enabled: bool) -> None:
-        enabled = bool(enabled) and not bool(state["loading"])
-        for control in clip_controls:
-            control.disabled = not enabled
+        client.gui.add_markdown("**Capture**")
+        with client.gui.add_folder(None):
+            snapshot_button = client.gui.add_button("Snapshot (Ctrl/Cmd+P)", disabled=True)
+            record_button = client.gui.add_button("Record screen (Ctrl+V)", disabled=True)
 
-    def update_clip_navigation() -> None:
-        paths = list(state["paths"])
-        active = state.get("active")
-        current_path = None if active is None else active["descriptor"]["path"]
-        try:
-            index = paths.index(current_path)
-        except ValueError:
-            index = -1
-        busy = (
-            bool(state["loading"])
-            or bool(state["recording"])
-            or bool(state["record_stopping"])
+        clip_controls = (
+            play_button,
+            reset_button,
+            step_back_button,
+            step_forward_button,
+            seek_back_button,
+            seek_forward_button,
+            frame_slider,
+            camera_button,
+            snapshot_button,
+            record_button,
         )
-        previous_clip_button.disabled = busy or index <= 0
-        next_clip_button.disabled = busy or index < 0 or index >= len(paths) - 1
 
-    def set_clip_jump_index(index: int) -> None:
-        index = int(np.clip(index, 0, len(CLIP_JUMP_MULTIPLIERS) - 1))
-        state["clip_jump_index"] = index
-        multiplier = CLIP_JUMP_MULTIPLIERS[index]
-        previous_clip_button.label = f"Previous {multiplier} clip{'s' if multiplier != 1 else ''} (←)"
-        next_clip_button.label = f"Next {multiplier} clip{'s' if multiplier != 1 else ''} (→)"
-        jump_down_button.disabled = index == 0
-        jump_up_button.disabled = index == len(CLIP_JUMP_MULTIPLIERS) - 1
+        def notify(client, title_text: str, body: str, *, error: bool = False) -> None:
+            if client is not None:
+                client.add_notification(
+                    title_text,
+                    body,
+                    auto_close=False if error else 3.0,
+                    color=(170, 64, 64) if error else (54, 76, 96),
+                )
 
-    def reset_client_cameras(lookat: np.ndarray, position: np.ndarray) -> None:
-        server.initial_camera.look_at = lookat
-        server.initial_camera.position = position
-        server.initial_camera.up = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
-        for client in server.get_clients().values():
+        def set_clip_controls(enabled: bool) -> None:
+            enabled = bool(enabled) and not bool(state["loading"])
+            for control in clip_controls:
+                control.disabled = not enabled
+
+        def update_clip_navigation() -> None:
+            paths = list(state["paths"])
+            active = state.get("active")
+            current_path = None if active is None else active["descriptor"]["path"]
+            try:
+                index = paths.index(current_path)
+            except ValueError:
+                index = -1
+            busy = (
+                bool(state["loading"])
+                or bool(state["recording"])
+                or bool(state["record_stopping"])
+            )
+            previous_clip_button.disabled = busy or index <= 0
+            next_clip_button.disabled = busy or index < 0 or index >= len(paths) - 1
+
+        def set_clip_jump_index(index: int) -> None:
+            index = int(np.clip(index, 0, len(CLIP_JUMP_MULTIPLIERS) - 1))
+            state["clip_jump_index"] = index
+            multiplier = CLIP_JUMP_MULTIPLIERS[index]
+            previous_clip_button.label = f"Previous {multiplier} clip{'s' if multiplier != 1 else ''} (←)"
+            next_clip_button.label = f"Next {multiplier} clip{'s' if multiplier != 1 else ''} (→)"
+            jump_down_button.disabled = index == 0
+            jump_up_button.disabled = index == len(CLIP_JUMP_MULTIPLIERS) - 1
+
+        def reset_client_cameras(lookat: np.ndarray, position: np.ndarray) -> None:
             try:
                 client.camera.position = position
                 client.camera.look_at = lookat
@@ -382,29 +390,25 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             except AssertionError:
                 pass
 
-    def current_camera_target(active, frame: int, *, reset: bool = False) -> np.ndarray | None:
-        camera_lookat = active["descriptor"].get("camera_lookat")
-        target = None if camera_lookat is None else camera_lookat(int(frame))
-        if target is None:
-            return None
-        target = np.asarray(target, dtype=np.float64).reshape(3)
-        smooth = float(np.clip(float(args.camera_smooth), 0.0, 0.999))
-        if reset or smooth <= 0.0:
-            state["camera_target"] = target.copy()
-        else:
-            state["camera_target"] = (
-                smooth * np.asarray(state["camera_target"], dtype=np.float64)
-                + (1.0 - smooth) * target
-            )
-        return np.asarray(state["camera_target"], dtype=np.float64)
+        def current_camera_target(active, frame: int, *, reset: bool = False) -> np.ndarray | None:
+            camera_lookat = active["descriptor"].get("camera_lookat")
+            target = None if camera_lookat is None else camera_lookat(int(frame))
+            if target is None:
+                return None
+            target = np.asarray(target, dtype=np.float64).reshape(3)
+            smooth = float(np.clip(float(args.camera_smooth), 0.0, 0.999))
+            if reset or smooth <= 0.0:
+                state["camera_target"] = target.copy()
+            else:
+                state["camera_target"] = (
+                    smooth * np.asarray(state["camera_target"], dtype=np.float64)
+                    + (1.0 - smooth) * target
+                )
+            return np.asarray(state["camera_target"], dtype=np.float64)
 
-    def reset_nonroot_camera(active) -> None:
-        lookat = active["initial_lookat"]
-        position = active["initial_position"]
-        clients = list(server.get_clients().values())
-        if not clients and state.get("camera_client") is not None:
-            clients = [state["camera_client"]]
-        for client in clients:
+        def reset_nonroot_camera(active) -> None:
+            lookat = active["initial_lookat"]
+            position = active["initial_position"]
             try:
                 if not np.allclose(client.camera.position, position):
                     client.camera.position = position
@@ -416,848 +420,888 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             except AssertionError:
                 pass
 
-    def update_follow_transform(active, target: np.ndarray | None) -> None:
-        offset = np.asarray(state["world_offset"], dtype=np.float64)
-        if bool(state["follow_camera"]) and target is not None:
-            if str(args.camera_mode) == "root":
-                client = state.get("camera_client")
-                anchor = np.asarray(state["follow_anchor"], dtype=np.float64)
-                if client is not None:
-                    try:
-                        anchor = np.asarray(client.camera.look_at, dtype=np.float64).copy()
-                    except AssertionError:
-                        pass
-            else:
-                reset_nonroot_camera(active)
-                anchor = active["initial_lookat"].copy()
-            state["follow_anchor"] = anchor.copy()
-            offset = anchor - np.asarray(target, dtype=np.float64)
-            state["world_offset"] = offset.copy()
-        world_handle.position = np.asarray(offset, dtype=np.float32)
-
-    def draw_frame(frame: int) -> None:
-        recorder = None
-        with state_lock:
-            active = state.get("active")
-            if active is None or bool(state["loading"]):
-                return
-            descriptor = active["descriptor"]
-            frame_count = int(descriptor["frame_count"])
-            frame = int(np.clip(int(frame), 0, frame_count - 1))
-            descriptor["set_frame"](frame)
-            state["frame"] = frame
-            target = (
-                current_camera_target(active, frame, reset=(frame == 0))
-                if bool(state["follow_camera"])
-                else None
-            )
-            data = descriptor["data"]
-            with server.atomic():
-                for body_id, handle in active["body_handles"]:
-                    handle.position = np.asarray(data.xpos[body_id], dtype=np.float32)
-                    handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
-                for entity, handle in active["entity_handles"]:
-                    handle.position = entity["pose_pos"][frame]
-                    handle.wxyz = entity["pose_rot"][frame]
-                for body_id, handle in zip(active["com_body_ids"], active["com_handles"]):
-                    handle.position = _projected_robot_com(data, body_id)
-                source_overlay = descriptor.get("source_overlay")
-                if active.get("source_handle") is not None:
-                    active["source_handle"].points = (
-                        np.asarray(
-                            source_overlay["points"][frame, source_overlay["slot_ids"]],
-                            dtype=np.float32,
-                        )
-                        + np.asarray(source_overlay["offset"], dtype=np.float32)
-                    )
-                robot_overlay = descriptor.get("robot_overlay")
-                if active.get("robot_handle") is not None:
-                    active["robot_handle"].points = _template_points_to_world(
-                        data,
-                        robot_overlay["geom_ids"],
-                        robot_overlay["local_pos"],
-                        robot_overlay["slot_ids"],
-                    )
-                ground_overlay = descriptor.get("ground_overlay")
-                if active.get("ground_handle") is not None:
-                    ground_points, ground_colors = _ground_contact_frame(data, ground_overlay, frame)
-                    if len(ground_points):
-                        active["ground_handle"].points = ground_points
-                        active["ground_handle"].colors = ground_colors
-                        active["ground_handle"].visible = True
-                    else:
-                        active["ground_handle"].visible = False
-                update_follow_transform(active, target)
-                if int(frame_slider.value) != frame:
-                    state["slider_write"] = True
-                    frame_slider.value = frame
-                    state["slider_write"] = False
-            if bool(state["recording"]) and not bool(state["record_stopping"]):
-                recorder = state.get("recorder")
-            if recorder is not None:
-                recorder.capture_frame()
-
-    def make_scene(descriptor: dict) -> dict:
-        descriptor["set_frame"](0)
-        state["generation"] = int(state["generation"]) + 1
-        root_path = f"/world/clips/clip_{state['generation']:06d}"
-        root_handle = server.scene.add_frame(root_path, show_axes=False)
-        body_handles, _geom_handles = _add_model_geometries(
-            server,
-            descriptor["model"],
-            descriptor["data"],
-            root_path=root_path,
-        )
-        entity_handles = []
-        for index, entity in enumerate(descriptor.get("scene_entities", [])):
-            entity_path = f"{root_path}/entities/{index:04d}"
-            handle = server.scene.add_frame(
-                entity_path,
-                show_axes=False,
-                position=entity["pose_pos"][0],
-                wxyz=entity["pose_rot"][0],
-            )
-            terrain = entity["entity_type"] == "terrain"
-            for mesh_index, (vertices, faces) in enumerate(entity["meshes"]):
-                server.scene.add_mesh_simple(
-                    f"{entity_path}/meshes/{mesh_index:04d}",
-                    vertices=vertices,
-                    faces=faces,
-                    color=(155, 169, 180) if terrain else (208, 161, 91),
-                    opacity=0.35 if terrain else None,
-                    side="double",
-                    cast_shadow=not terrain,
-                    receive_shadow=True,
-                )
-            entity_handles.append((entity, handle))
-        com_body_ids = _robot_com_body_ids(descriptor["model"], (0,))
-        com_handles = _add_robot_com_markers(
-            server, root_path, descriptor["data"], com_body_ids, bool(com_checkbox.value)
-        )
-        source_handle = None
-        source_overlay = descriptor.get("source_overlay")
-        if source_overlay is not None:
-            source_points = (
-                np.asarray(source_overlay["points"][0, source_overlay["slot_ids"]], dtype=np.float32)
-                + np.asarray(source_overlay["offset"], dtype=np.float32)
-            )
-            source_handle = server.scene.add_point_cloud(
-                f"{root_path}/overlays/source_motion",
-                points=source_points,
-                colors=_rgb_u8(source_overlay["colors"]),
-                point_size=max(0.004, float(source_overlay["radius"]) * 2.0),
-                point_shape="circle",
-                point_shading="gradient",
-                precision="float32",
-            )
-        robot_handle = None
-        robot_overlay = descriptor.get("robot_overlay")
-        if robot_overlay is not None:
-            robot_points = _template_points_to_world(
-                descriptor["data"],
-                robot_overlay["geom_ids"],
-                robot_overlay["local_pos"],
-                robot_overlay["slot_ids"],
-            )
-            robot_handle = server.scene.add_point_cloud(
-                f"{root_path}/overlays/robot_surface",
-                points=robot_points,
-                colors=_rgb_u8(robot_overlay["colors"]),
-                point_size=max(0.004, float(robot_overlay["radius"]) * 2.0),
-                point_shape="circle",
-                point_shading="gradient",
-                precision="float32",
-            )
-        ground_handle = None
-        ground_overlay = descriptor.get("ground_overlay")
-        if ground_overlay is not None:
-            ground_points, ground_colors = _ground_contact_frame(descriptor["data"], ground_overlay, 0)
-            has_points = len(ground_points) > 0
-            ground_handle = server.scene.add_point_cloud(
-                f"{root_path}/overlays/ground_contact",
-                points=ground_points if has_points else np.zeros((1, 3), dtype=np.float32),
-                colors=(
-                    ground_colors
-                    if has_points
-                    else np.asarray([[255, 20, 10]], dtype=np.uint8)
-                ),
-                point_size=max(0.006, float(ground_overlay["radius"]) * 2.0),
-                point_shape="circle",
-                point_shading="gradient",
-                precision="float32",
-                visible=has_points,
-            )
-        initial_lookat = np.asarray(descriptor["fixed_lookat"], dtype=np.float64).reshape(3)
-        initial_position = _camera_position(
-            initial_lookat,
-            float(descriptor["fixed_distance"]),
-            float(args.camera_azimuth),
-            float(args.camera_elevation),
-        )
-        return {
-            "descriptor": descriptor,
-            "root_path": root_path,
-            "root_handle": root_handle,
-            "body_handles": body_handles,
-            "entity_handles": entity_handles,
-            "com_body_ids": com_body_ids,
-            "com_handles": com_handles,
-            "source_handle": source_handle,
-            "robot_handle": robot_handle,
-            "ground_handle": ground_handle,
-            "initial_lookat": initial_lookat,
-            "initial_position": initial_position,
-        }
-
-    def unload_active() -> None:
-        active = state.get("active")
-        state["active"] = None
-        if active is None:
-            return
-        server.scene.remove_by_name(active["root_path"])
-        try:
-            active["descriptor"]["cleanup"]()
-        except Exception as exc:
-            print(f"[{VIS_PREFIX}][Viser][WARN] clip cleanup failed: {exc}", flush=True)
-
-    def select_dropdown_path(path: Path) -> None:
-        label = next(
-            (label for label, candidate in state["label_to_path"].items() if candidate == path),
-            None,
-        )
-        if label is None:
-            return
-        state["selector_write"] = True
-        result_dropdown.value = label
-        state["selector_write"] = False
-
-    def show_clip_status(path: Path, descriptor: dict) -> None:
-        paths = state["paths"]
-        number = paths.index(path) + 1
-        status_markdown.content = (
-            f"**Motion {number}/{len(paths)}** · "
-            f"{int(descriptor['frame_count'])} frames · "
-            f"{float(descriptor['fps']):.3f} FPS  \n"
-            f"`{path.relative_to(result_dir).as_posix()}`  \n"
-            "MuJoCo kinematics / browser WebGL rendering"
-        )
-
-    def load_path(path: Path, client=None) -> bool:
-        path = Path(path)
-        with state_lock:
-            if bool(state["recording"]) or bool(state["record_stopping"]):
-                notify(client, "Viewer busy", "Stop the current recording before changing clips.")
-                return False
-            active = state.get("active")
-            if active is not None and active["descriptor"]["path"] == path:
-                select_dropdown_path(path)
-                update_clip_navigation()
-                return True
-        if not load_lock.acquire(blocking=False):
-            notify(client, "Viewer busy", "A result is already loading.")
-            return False
-        descriptor = None
-        try:
-            with state_lock:
-                # Recheck after acquiring load_lock so a simultaneous recording
-                # cannot race with model replacement.
-                if bool(state["recording"]) or bool(state["record_stopping"]):
-                    notify(client, "Viewer busy", "Stop the current recording before changing clips.")
-                    return False
-                state["loading"] = True
-                set_clip_controls(False)
-                refresh_button.disabled = True
-                result_dropdown.disabled = True
-                update_clip_navigation()
-                status_markdown.content = f"Loading `{path.name}`…"
-            try:
-                descriptor = load_clip(path)
-                new_active = make_scene(descriptor)
-            except Exception as exc:
-                # make_scene() may have failed after adding part of its unique
-                # root. Removing that root recursively clears the partial scene.
-                partial_root = f"/world/clips/clip_{int(state['generation']):06d}"
-                server.scene.remove_by_name(partial_root)
-                if descriptor is not None:
-                    descriptor["cleanup"]()
-                with state_lock:
-                    status_markdown.content = f"**Failed to load `{path.name}`:** `{exc}`"
-                    state["loading"] = False
-                    active = state.get("active")
-                    if active is not None:
-                        select_dropdown_path(active["descriptor"]["path"])
-                    set_clip_controls(active is not None)
-                    result_dropdown.disabled = not bool(state["paths"])
-                    refresh_button.disabled = False
-                    update_clip_navigation()
-                print(f"[{VIS_PREFIX}][Viser][ERROR] failed to load {path}: {exc}", flush=True)
-                notify(client, "Result failed to load", str(exc), error=True)
-                return False
-
-            with state_lock:
-                old_active = state.get("active")
-                preserve_camera = old_active is not None and not bool(state["follow_camera"])
-                state["active"] = new_active
-                state["frame"] = 0
-                state["camera_target"] = new_active["initial_lookat"].copy()
-                state["follow_anchor"] = new_active["initial_lookat"].copy()
-                if not preserve_camera:
-                    state["world_offset"] = np.zeros(3, dtype=np.float64)
-                state["loading"] = False
-                descriptor["set_frame"](0)
-                frame_slider.max = max(1, int(descriptor["frame_count"]) - 1)
-                state["slider_write"] = True
-                frame_slider.value = 0
-                state["slider_write"] = False
-                play_button.label = "Pause (Space)" if state["playing"] else "Play (Space)"
-                title_markdown.content = (
-                    f"**{title}**  \nBatch folder: `{result_dir}`"
-                )
-                show_clip_status(path, descriptor)
-                select_dropdown_path(path)
-                set_clip_controls(True)
-                result_dropdown.disabled = False
-                refresh_button.disabled = False
-                update_clip_navigation()
-                if not preserve_camera:
-                    reset_client_cameras(new_active["initial_lookat"], new_active["initial_position"])
-                draw_frame(0)
-            if old_active is not None:
-                server.scene.remove_by_name(old_active["root_path"])
-                old_active["descriptor"]["cleanup"]()
-            print(f"[{VIS_PREFIX}][Viser] loaded result: {path}", flush=True)
-            notify(client, "Result loaded", path.name)
-            return True
-        finally:
-            load_lock.release()
-
-    def refresh_results(client=None, *, auto_load: bool = True) -> None:
-        if (
-            bool(state["loading"])
-            or bool(state["recording"])
-            or bool(state["record_stopping"])
-        ):
-            message = (
-                "Stop the current recording before refreshing results."
-                if bool(state["recording"]) or bool(state["record_stopping"])
-                else "Wait for the current result to finish loading."
-            )
-            notify(client, "Viewer busy", message)
-            return
-        paths = scan_results(result_dir)
-        labels, mapping = _result_labels(result_dir, paths)
-        with state_lock:
-            active = state.get("active")
-            current_path = None if active is None else active["descriptor"]["path"]
-            state["paths"] = paths
-            state["label_to_path"] = mapping
-            state["selector_write"] = True
-            result_dropdown.options = tuple(labels) if labels else (EMPTY_OPTION,)
-            if current_path in paths:
-                select_dropdown_path(current_path)
-            state["selector_write"] = False
-            result_dropdown.disabled = not bool(paths)
-            update_clip_navigation()
-
-        if not paths:
-            with state_lock:
-                unload_active()
-                set_clip_controls(False)
-                title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
-                status_markdown.content = (
-                    "No results found. The viewer is ready; run batch retargeting, "
-                    "then select **Refresh**."
-                )
-                world_handle.position = np.zeros(3, dtype=np.float32)
-                reset_client_cameras(default_lookat, default_position)
-            notify(client, "Results refreshed", "No complete retarget results found.")
-            return
-
-        target = current_path if current_path in paths else paths[0]
-        if auto_load and target != current_path:
-            load_path(target, client)
-        else:
-            with state_lock:
-                if active is not None and current_path in paths:
-                    show_clip_status(current_path, active["descriptor"])
-                update_clip_navigation()
-            notify(client, "Results refreshed", f"Found {len(paths)} result(s).")
-
-    def seek(delta: int) -> None:
-        with state_lock:
-            active = state.get("active")
-            if active is None:
-                return
-            frame = int(
-                np.clip(
-                    int(state["frame"]) + int(delta),
-                    0,
-                    int(active["descriptor"]["frame_count"]) - 1,
-                )
-            )
-        draw_frame(frame)
-
-    @server.on_client_connect
-    def _on_client_connect(client) -> None:
-        with state_lock:
-            state["camera_client"] = client
-            active = state.get("active")
-            lookat = default_lookat if active is None else active["initial_lookat"]
-            position = default_position if active is None else active["initial_position"]
-        client.camera.position = position
-        client.camera.look_at = lookat
-        client.camera.up_direction = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
-        print(f"[{VIS_PREFIX}][Viser] browser connected: {client.client_id}", flush=True)
-
-    @refresh_button.on_click
-    def _refresh(event) -> None:
-        refresh_results(event.client)
-
-    if folder_dropdown is not None:
-        @folder_dropdown.on_update
-        def _select_folder(event) -> None:
-            nonlocal result_dir
-            selected = result_dirs.get(str(folder_dropdown.value))
-            if selected is None or selected == result_dir:
-                return
-            with state_lock:
-                if state["loading"] or state["recording"] or state["record_stopping"]:
-                    current_label = next(label for label, path in result_dirs.items() if path == result_dir)
-                    folder_dropdown.value = current_label
-                    notify(event.client, "Viewer busy", "Wait for loading or recording to finish.")
-                    return
-                unload_active()
-                state["paths"] = []
-                state["label_to_path"] = {}
-                set_clip_controls(False)
-                result_dir = selected
-                title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
-            refresh_results(event.client)
-
-    @result_dropdown.on_update
-    def _select_result(event) -> None:
-        with state_lock:
-            if bool(state["selector_write"]):
-                return
-            selected_label = str(result_dropdown.value)
-            path = state["label_to_path"].get(selected_label)
-        if path is not None:
-            load_path(path, event.client)
-
-    def adjacent_clip(direction: int, client=None) -> None:
-        with state_lock:
-            active = state.get("active")
-            if active is None:
-                return
-            paths = list(state["paths"])
-            try:
-                index = paths.index(active["descriptor"]["path"])
-            except ValueError:
-                return
-            jump = CLIP_JUMP_MULTIPLIERS[int(state["clip_jump_index"])]
-            index = int(np.clip(index + direction * jump, 0, len(paths) - 1))
-            target = paths[index]
-        load_path(target, client)
-
-    @previous_clip_button.on_click
-    def _previous_clip(event) -> None:
-        adjacent_clip(-1, event.client)
-
-    @next_clip_button.on_click
-    def _next_clip(event) -> None:
-        adjacent_clip(1, event.client)
-
-    @jump_down_button.on_click
-    def _jump_down(_event) -> None:
-        with state_lock:
-            set_clip_jump_index(int(state["clip_jump_index"]) - 1)
-
-    @jump_up_button.on_click
-    def _jump_up(_event) -> None:
-        with state_lock:
-            set_clip_jump_index(int(state["clip_jump_index"]) + 1)
-
-    @play_button.on_click
-    def _play_pause(_event) -> None:
-        with state_lock:
-            if state.get("active") is None:
-                return
-            state["playing"] = not bool(state["playing"])
-            play_button.label = "Pause (Space)" if state["playing"] else "Play (Space)"
-
-    @reset_button.on_click
-    def _reset(_event) -> None:
-        draw_frame(0)
-
-    @step_back_button.on_click
-    def _step_back(_event) -> None:
-        seek(-1)
-
-    @step_forward_button.on_click
-    def _step_forward(_event) -> None:
-        seek(1)
-
-    @seek_back_button.on_click
-    def _seek_back(_event) -> None:
-        with state_lock:
-            active = state.get("active")
-            fps = 1.0 if active is None else float(active["descriptor"]["fps"])
-        seek(-max(1, int(round(fps))))
-
-    @seek_forward_button.on_click
-    def _seek_forward(_event) -> None:
-        with state_lock:
-            active = state.get("active")
-            fps = 1.0 if active is None else float(active["descriptor"]["fps"])
-        seek(max(1, int(round(fps))))
-
-    @frame_slider.on_update
-    def _frame_update(_event) -> None:
-        with state_lock:
-            if bool(state["slider_write"]):
-                return
-        draw_frame(int(frame_slider.value))
-
-    @speed_slider.on_update
-    def _speed_update(_event) -> None:
-        with state_lock:
-            state["speed"] = float(speed_slider.value)
-
-    @loop_checkbox.on_update
-    def _loop_update(_event) -> None:
-        with state_lock:
-            state["loop"] = bool(loop_checkbox.value)
-
-    @com_checkbox.on_update
-    def _com_update(_event) -> None:
-        with state_lock, server.atomic():
-            active = state.get("active")
-            if active is not None:
-                for handle in active["com_handles"]:
-                    handle.visible = bool(com_checkbox.value)
-
-    @camera_button.on_click
-    def _camera_update(event) -> None:
-        with state_lock:
-            active = state.get("active")
-            if active is None:
-                return
-            enabled = not bool(state["follow_camera"])
-            client = event.client if event.client is not None else state.get("camera_client")
-            if client is not None:
-                state["camera_client"] = client
-            if enabled:
+        def update_follow_transform(active, target: np.ndarray | None) -> None:
+            offset = np.asarray(state["world_offset"], dtype=np.float64)
+            if bool(state["follow_camera"]) and target is not None:
                 if str(args.camera_mode) == "root":
+                    client = state.get("camera_client")
+                    anchor = np.asarray(state["follow_anchor"], dtype=np.float64)
                     if client is not None:
                         try:
-                            state["follow_anchor"] = np.asarray(
-                                client.camera.look_at, dtype=np.float64
-                            ).copy()
+                            anchor = np.asarray(client.camera.look_at, dtype=np.float64).copy()
                         except AssertionError:
                             pass
                 else:
-                    state["follow_anchor"] = active["initial_lookat"].copy()
                     reset_nonroot_camera(active)
-            state["follow_camera"] = enabled
-            camera_button.label = f"Fixed camera (F): {'ON' if enabled else 'OFF'}"
-            camera_button.color = CAMERA_ACTIVE_COLOR if enabled else None
-            frame = int(state["frame"])
-        draw_frame(frame)
+                    anchor = active["initial_lookat"].copy()
+                state["follow_anchor"] = anchor.copy()
+                offset = anchor - np.asarray(target, dtype=np.float64)
+                state["world_offset"] = offset.copy()
+            world_handle.position = np.asarray(offset, dtype=np.float32)
 
-    @snapshot_button.on_click
-    def _snapshot(event) -> None:
-        client = event.client
-        if client is None or state.get("active") is None:
-            return
-        try:
-            import imageio.v3 as iio
-            from PIL import Image
-
-            image = None
-            capture_scale = None
-            last_error = None
-            for scale in SNAPSHOT_SUPERSAMPLE_LEVELS:
-                render_width = int(round(SNAPSHOT_WIDTH * scale))
-                render_height = int(round(SNAPSHOT_HEIGHT * scale))
-                try:
-                    with render_lock:
-                        server.flush()
-                        candidate = np.asarray(
-                            client.get_render(
-                                height=render_height,
-                                width=render_width,
-                                transport_format="png",
-                            )
-                        )
-                    if candidate.ndim != 3 or candidate.shape[-1] not in (3, 4):
-                        raise RuntimeError(f"unexpected snapshot array shape: {candidate.shape}")
-                    if candidate.shape[:2] != (render_height, render_width):
-                        raise RuntimeError(
-                            f"unexpected snapshot size: {candidate.shape[1]}x{candidate.shape[0]}"
-                        )
-                    if candidate.shape[-1] == 4 and not np.any(candidate[..., 3]):
-                        raise RuntimeError("render is fully transparent")
-                    image = candidate
-                    capture_scale = scale
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    print(
-                        f"[{VIS_PREFIX}][Viser][WARN] {scale:g}x snapshot failed: {exc}",
-                        flush=True,
-                    )
-            if image is None or capture_scale is None:
-                raise RuntimeError("All snapshot render sizes failed") from last_error
-            if image.shape[-1] == 4:
-                alpha = image[..., 3:4].astype(np.float32) / 255.0
-                image = np.clip(
-                    np.rint(image[..., :3].astype(np.float32) * alpha + 255.0 * (1.0 - alpha)),
-                    0.0,
-                    255.0,
-                ).astype(np.uint8)
-            else:
-                image = np.asarray(image[..., :3], dtype=np.uint8)
-            if image.shape[:2] != (SNAPSHOT_HEIGHT, SNAPSHOT_WIDTH):
-                image = np.asarray(
-                    Image.fromarray(image, mode="RGB").resize(
-                        (SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT),
-                        resample=Image.Resampling.LANCZOS,
-                    ),
-                    dtype=np.uint8,
-                )
-            content = iio.imwrite("<bytes>", image, extension=".png")
-            filename = time.strftime("umr_snapshot_%Y%m%d_%H%M%S.png")
-            client.send_file_download(filename, content, save_immediately=True)
-            notify(
-                client,
-                "Snapshot ready",
-                f"{filename} · {SNAPSHOT_WIDTH}×{SNAPSHOT_HEIGHT} · {capture_scale:g}× SSAA",
-            )
-        except Exception as exc:
-            print(f"[{VIS_PREFIX}][Viser][WARN] snapshot failed: {exc}", flush=True)
-            notify(client, "Snapshot failed", str(exc), error=True)
-
-
-    def recording_finished(error: Exception | None, filename: str, frames: int) -> None:
-        with state_lock:
-            if bool(state["recording"]):
-                state["playback_clock_reset"] = True
-            state["recording"] = False
-            state["record_stopping"] = False
-            state["recorder"] = None
-            has_active = state.get("active") is not None
-            has_paths = bool(state["paths"])
-        record_button.label = "Record screen (Ctrl+V)"
-        record_button.color = None
-        record_button.disabled = not has_active
-        result_dropdown.disabled = not has_paths
-        refresh_button.disabled = False
-        update_clip_navigation()
-        if error is None:
-            print(
-                f"[{VIS_PREFIX}][Viser] saved recording {filename} "
-                f"({frames} frames, {int(args.record_width)}x{int(args.record_height)})",
-                flush=True,
-            )
-        else:
-            print(f"[{VIS_PREFIX}][Viser][WARN] recording failed: {error}", flush=True)
-
-    def toggle_recording(client) -> None:
-        with state_lock:
-            recorder = state.get("recorder")
-            if recorder is not None:
-                if bool(state["record_stopping"]):
-                    return
-                state["recording"] = False
-                state["record_stopping"] = True
-                state["playback_clock_reset"] = True
-                record_button.label = "Finishing recording..."
-                record_button.disabled = True
-                recorder.request_stop()
-                return
-
-            active = state.get("active")
-            if active is None or bool(state["loading"]):
-                return
-            if client is None:
-                print(
-                    f"[{VIS_PREFIX}][Viser][WARN] recording requested without a browser client.",
-                    flush=True,
-                )
-                return
-            descriptor = active["descriptor"]
-            video_fps = (
-                float(args.record_fps)
-                if float(args.record_fps) > 0.0
-                else float(descriptor["fps"])
-            )
-            try:
-                recorder = _ViserVideoRecorder(
-                    server=server,
-                    client=client,
-                    fps=video_fps,
-                    width=int(args.record_width),
-                    height=int(args.record_height),
-                    filename_prefix=descriptor["path"].stem,
-                    render_lock=render_lock,
-                    on_finished=recording_finished,
-                )
-                recorder.start()
-            except Exception as exc:
-                notify(client, "Recording failed", str(exc), error=True)
-                return
-            state["recorder"] = recorder
-            state["recording"] = True
-            state["record_stopping"] = False
-            state["playback_clock_reset"] = True
-            record_button.label = "Stop recording (Ctrl+V)"
-            record_button.color = CAMERA_ACTIVE_COLOR
-            result_dropdown.disabled = True
-            refresh_button.disabled = True
-            update_clip_navigation()
-            recorder.capture_frame()
-        notify(client, "Recording started", "Press Ctrl+V again to stop and download.")
-
-    @record_button.on_click
-    def _record(event) -> None:
-        toggle_recording(event.client)
-
-    _install_keyboard_shortcuts(
-        server,
-        {
-            "play": str(play_button._impl.uuid),
-            "reset": str(reset_button._impl.uuid),
-            "step_back": str(step_back_button._impl.uuid),
-            "step_forward": str(step_forward_button._impl.uuid),
-            "seek_back": str(seek_back_button._impl.uuid),
-            "seek_forward": str(seek_forward_button._impl.uuid),
-            "camera": str(camera_button._impl.uuid),
-            "snapshot": str(snapshot_button._impl.uuid),
-            "record": str(record_button._impl.uuid),
-            "prev_clip": str(previous_clip_button._impl.uuid),
-            "next_clip": str(next_clip_button._impl.uuid),
-            "jump_down": str(jump_down_button._impl.uuid),
-            "jump_up": str(jump_up_button._impl.uuid),
-        },
-    )
-
-    refresh_results(auto_load=True)
-
-    def playback_loop() -> None:
-        next_deadline = time.monotonic()
-        previous_tick = next_deadline
-        frame_accumulator = 0.0
-        schedule_key = None
-        while not stop_event.is_set():
+        def draw_frame(frame: int) -> None:
+            recorder = None
             with state_lock:
                 active = state.get("active")
-                playing = (
-                    bool(state["playing"])
-                    and not bool(state["loading"])
-                    and active is not None
+                if active is None or bool(state["loading"]):
+                    return
+                descriptor = active["descriptor"]
+                frame_count = int(descriptor["frame_count"])
+                frame = int(np.clip(int(frame), 0, frame_count - 1))
+                descriptor["set_frame"](frame)
+                state["frame"] = frame
+                target = (
+                    current_camera_target(active, frame, reset=(frame == 0))
+                    if bool(state["follow_camera"])
+                    else None
                 )
-                speed = max(0.1, float(state["speed"]))
-                if active is None:
-                    clip_key = None
-                    fps = 1.0
-                    frame_count = 1
-                else:
-                    clip_key = active["root_path"]
-                    fps = max(float(active["descriptor"]["fps"]), 1e-6)
-                    frame_count = int(active["descriptor"]["frame_count"])
-                recording = bool(state["recording"])
-                record_stopping = bool(state["record_stopping"])
-                reset_clock = bool(state["playback_clock_reset"])
-                state["playback_clock_reset"] = False
-            if reset_clock:
-                schedule_key = None
-                frame_accumulator = 0.0
-            if not playing:
-                schedule_key = None
-                frame_accumulator = 0.0
-                stop_event.wait(0.01)
-                continue
+                data = descriptor["data"]
+                with client.atomic():
+                    for body_id, handle in active["body_handles"]:
+                        handle.position = np.asarray(data.xpos[body_id], dtype=np.float32)
+                        handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
+                    for entity, handle in active["entity_handles"]:
+                        handle.position = entity["pose_pos"][frame]
+                        handle.wxyz = entity["pose_rot"][frame]
+                    for body_id, handle in zip(active["com_body_ids"], active["com_handles"]):
+                        handle.position = _projected_robot_com(data, body_id)
+                    source_overlay = descriptor.get("source_overlay")
+                    if active.get("source_handle") is not None:
+                        active["source_handle"].points = (
+                            np.asarray(
+                                source_overlay["points"][frame, source_overlay["slot_ids"]],
+                                dtype=np.float32,
+                            )
+                            + np.asarray(source_overlay["offset"], dtype=np.float32)
+                        )
+                    robot_overlay = descriptor.get("robot_overlay")
+                    if active.get("robot_handle") is not None:
+                        active["robot_handle"].points = _template_points_to_world(
+                            data,
+                            robot_overlay["geom_ids"],
+                            robot_overlay["local_pos"],
+                            robot_overlay["slot_ids"],
+                        )
+                    ground_overlay = descriptor.get("ground_overlay")
+                    if active.get("ground_handle") is not None:
+                        ground_points, ground_colors = _ground_contact_frame(data, ground_overlay, frame)
+                        if len(ground_points):
+                            active["ground_handle"].points = ground_points
+                            active["ground_handle"].colors = ground_colors
+                            active["ground_handle"].visible = True
+                        else:
+                            active["ground_handle"].visible = False
+                    update_follow_transform(active, target)
+                    if int(frame_slider.value) != frame:
+                        state["slider_write"] = True
+                        frame_slider.value = frame
+                        state["slider_write"] = False
+                if bool(state["recording"]) and not bool(state["record_stopping"]):
+                    recorder = state.get("recorder")
+                if recorder is not None:
+                    recorder.capture_frame()
 
-            if recording:
-                schedule_key = None
-                frame_accumulator = 0.0
-                if record_stopping:
+        def make_scene(descriptor: dict) -> dict:
+            descriptor["set_frame"](0)
+            state["generation"] = int(state["generation"]) + 1
+            root_path = f"/world/clips/clip_{state['generation']:06d}"
+            root_handle = client.scene.add_frame(root_path, show_axes=False)
+            body_handles, _geom_handles = _add_model_geometries(
+                client,
+                descriptor["model"],
+                descriptor["data"],
+                root_path=root_path,
+            )
+            entity_handles = []
+            for index, entity in enumerate(descriptor.get("scene_entities", [])):
+                entity_path = f"{root_path}/entities/{index:04d}"
+                handle = client.scene.add_frame(
+                    entity_path,
+                    show_axes=False,
+                    position=entity["pose_pos"][0],
+                    wxyz=entity["pose_rot"][0],
+                )
+                terrain = entity["entity_type"] == "terrain"
+                for mesh_index, (vertices, faces) in enumerate(entity["meshes"]):
+                    client.scene.add_mesh_simple(
+                        f"{entity_path}/meshes/{mesh_index:04d}",
+                        vertices=vertices,
+                        faces=faces,
+                        color=(155, 169, 180) if terrain else (208, 161, 91),
+                        opacity=0.35 if terrain else None,
+                        side="double",
+                        cast_shadow=not terrain,
+                        receive_shadow=True,
+                    )
+                entity_handles.append((entity, handle))
+            com_body_ids = _robot_com_body_ids(descriptor["model"], (0,))
+            com_handles = _add_robot_com_markers(
+                client, root_path, descriptor["data"], com_body_ids, bool(com_checkbox.value)
+            )
+            source_handle = None
+            source_overlay = descriptor.get("source_overlay")
+            if source_overlay is not None:
+                source_points = (
+                    np.asarray(source_overlay["points"][0, source_overlay["slot_ids"]], dtype=np.float32)
+                    + np.asarray(source_overlay["offset"], dtype=np.float32)
+                )
+                source_handle = client.scene.add_point_cloud(
+                    f"{root_path}/overlays/source_motion",
+                    points=source_points,
+                    colors=_rgb_u8(source_overlay["colors"]),
+                    point_size=max(0.004, float(source_overlay["radius"]) * 2.0),
+                    point_shape="circle",
+                    point_shading="gradient",
+                    precision="float32",
+                )
+            robot_handle = None
+            robot_overlay = descriptor.get("robot_overlay")
+            if robot_overlay is not None:
+                robot_points = _template_points_to_world(
+                    descriptor["data"],
+                    robot_overlay["geom_ids"],
+                    robot_overlay["local_pos"],
+                    robot_overlay["slot_ids"],
+                )
+                robot_handle = client.scene.add_point_cloud(
+                    f"{root_path}/overlays/robot_surface",
+                    points=robot_points,
+                    colors=_rgb_u8(robot_overlay["colors"]),
+                    point_size=max(0.004, float(robot_overlay["radius"]) * 2.0),
+                    point_shape="circle",
+                    point_shading="gradient",
+                    precision="float32",
+                )
+            ground_handle = None
+            ground_overlay = descriptor.get("ground_overlay")
+            if ground_overlay is not None:
+                ground_points, ground_colors = _ground_contact_frame(descriptor["data"], ground_overlay, 0)
+                has_points = len(ground_points) > 0
+                ground_handle = client.scene.add_point_cloud(
+                    f"{root_path}/overlays/ground_contact",
+                    points=ground_points if has_points else np.zeros((1, 3), dtype=np.float32),
+                    colors=(
+                        ground_colors
+                        if has_points
+                        else np.asarray([[255, 20, 10]], dtype=np.uint8)
+                    ),
+                    point_size=max(0.006, float(ground_overlay["radius"]) * 2.0),
+                    point_shape="circle",
+                    point_shading="gradient",
+                    precision="float32",
+                    visible=has_points,
+                )
+            initial_lookat = np.asarray(descriptor["fixed_lookat"], dtype=np.float64).reshape(3)
+            initial_position = _camera_position(
+                initial_lookat,
+                float(descriptor["fixed_distance"]),
+                float(args.camera_azimuth),
+                float(args.camera_elevation),
+            )
+            return {
+                "descriptor": descriptor,
+                "root_path": root_path,
+                "root_handle": root_handle,
+                "body_handles": body_handles,
+                "entity_handles": entity_handles,
+                "com_body_ids": com_body_ids,
+                "com_handles": com_handles,
+                "source_handle": source_handle,
+                "robot_handle": robot_handle,
+                "ground_handle": ground_handle,
+                "initial_lookat": initial_lookat,
+                "initial_position": initial_position,
+            }
+
+        def unload_active() -> None:
+            active = state.get("active")
+            state["active"] = None
+            if active is None:
+                return
+            client.scene.remove_by_name(active["root_path"])
+            try:
+                active["descriptor"]["cleanup"]()
+            except Exception as exc:
+                print(f"[{VIS_PREFIX}][Viser][WARN] clip cleanup failed: {exc}", flush=True)
+
+        def select_dropdown_path(path: Path) -> None:
+            label = next(
+                (label for label, candidate in state["label_to_path"].items() if candidate == path),
+                None,
+            )
+            if label is None:
+                return
+            state["selector_write"] = True
+            result_dropdown.value = label
+            state["selector_write"] = False
+
+        def show_clip_status(path: Path, descriptor: dict) -> None:
+            paths = state["paths"]
+            number = paths.index(path) + 1
+            status_markdown.content = (
+                f"**Motion {number}/{len(paths)}** · "
+                f"{int(descriptor['frame_count'])} frames · "
+                f"{float(descriptor['fps']):.3f} FPS  \n"
+                f"`{path.relative_to(result_dir).as_posix()}`  \n"
+                "MuJoCo kinematics / browser WebGL rendering"
+            )
+
+        def load_path(path: Path, client=None) -> bool:
+            path = Path(path)
+            with state_lock:
+                if bool(state["recording"]) or bool(state["record_stopping"]):
+                    notify(client, "Viewer busy", "Stop the current recording before changing clips.")
+                    return False
+                active = state.get("active")
+                if active is not None and active["descriptor"]["path"] == path:
+                    select_dropdown_path(path)
+                    update_clip_navigation()
+                    return True
+            if not load_lock.acquire(blocking=False):
+                notify(client, "Viewer busy", "A result is already loading.")
+                return False
+            descriptor = None
+            try:
+                with state_lock:
+                    # Recheck after acquiring load_lock so a simultaneous recording
+                    # cannot race with model replacement.
+                    if bool(state["recording"]) or bool(state["record_stopping"]):
+                        notify(client, "Viewer busy", "Stop the current recording before changing clips.")
+                        return False
+                    state["loading"] = True
+                    set_clip_controls(False)
+                    refresh_button.disabled = True
+                    result_dropdown.disabled = True
+                    update_clip_navigation()
+                    status_markdown.content = f"Loading `{path.name}`…"
+                try:
+                    descriptor = load_clip(path)
+                    new_active = make_scene(descriptor)
+                except Exception as exc:
+                    # make_scene() may have failed after adding part of its unique
+                    # root. Removing that root recursively clears the partial scene.
+                    partial_root = f"/world/clips/clip_{int(state['generation']):06d}"
+                    client.scene.remove_by_name(partial_root)
+                    if descriptor is not None:
+                        descriptor["cleanup"]()
+                    with state_lock:
+                        status_markdown.content = f"**Failed to load `{path.name}`:** `{exc}`"
+                        state["loading"] = False
+                        active = state.get("active")
+                        if active is not None:
+                            select_dropdown_path(active["descriptor"]["path"])
+                        set_clip_controls(active is not None)
+                        result_dropdown.disabled = not bool(state["paths"])
+                        refresh_button.disabled = False
+                        update_clip_navigation()
+                    print(f"[{VIS_PREFIX}][Viser][ERROR] failed to load {path}: {exc}", flush=True)
+                    notify(client, "Result failed to load", str(exc), error=True)
+                    return False
+
+                with state_lock:
+                    old_active = state.get("active")
+                    preserve_camera = old_active is not None and not bool(state["follow_camera"])
+                    state["active"] = new_active
+                    state["frame"] = 0
+                    state["camera_target"] = new_active["initial_lookat"].copy()
+                    state["follow_anchor"] = new_active["initial_lookat"].copy()
+                    if not preserve_camera:
+                        state["world_offset"] = np.zeros(3, dtype=np.float64)
+                    state["loading"] = False
+                    descriptor["set_frame"](0)
+                    frame_slider.max = max(1, int(descriptor["frame_count"]) - 1)
+                    state["slider_write"] = True
+                    frame_slider.value = 0
+                    state["slider_write"] = False
+                    play_button.label = "Pause (Space)" if state["playing"] else "Play (Space)"
+                    title_markdown.content = (
+                        f"**{title}**  \nBatch folder: `{result_dir}`"
+                    )
+                    show_clip_status(path, descriptor)
+                    select_dropdown_path(path)
+                    set_clip_controls(True)
+                    result_dropdown.disabled = False
+                    refresh_button.disabled = False
+                    update_clip_navigation()
+                    if not preserve_camera:
+                        reset_client_cameras(new_active["initial_lookat"], new_active["initial_position"])
+                    draw_frame(0)
+                if old_active is not None:
+                    client.scene.remove_by_name(old_active["root_path"])
+                    old_active["descriptor"]["cleanup"]()
+                print(f"[{VIS_PREFIX}][Viser] loaded result: {path}", flush=True)
+                notify(client, "Result loaded", path.name)
+                return True
+            finally:
+                load_lock.release()
+
+        def refresh_results(client=None, *, auto_load: bool = True) -> None:
+            if (
+                bool(state["loading"])
+                or bool(state["recording"])
+                or bool(state["record_stopping"])
+            ):
+                message = (
+                    "Stop the current recording before refreshing results."
+                    if bool(state["recording"]) or bool(state["record_stopping"])
+                    else "Wait for the current result to finish loading."
+                )
+                notify(client, "Viewer busy", message)
+                return
+            paths = scan_results(result_dir)
+            labels, mapping = _result_labels(result_dir, paths)
+            with state_lock:
+                active = state.get("active")
+                current_path = None if active is None else active["descriptor"]["path"]
+                state["paths"] = paths
+                state["label_to_path"] = mapping
+                state["selector_write"] = True
+                result_dropdown.options = tuple(labels) if labels else (EMPTY_OPTION,)
+                if current_path in paths:
+                    select_dropdown_path(current_path)
+                state["selector_write"] = False
+                result_dropdown.disabled = not bool(paths)
+                update_clip_navigation()
+
+            if not paths:
+                with state_lock:
+                    unload_active()
+                    set_clip_controls(False)
+                    title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
+                    status_markdown.content = (
+                        "No results found. The viewer is ready; run batch retargeting, "
+                        "then select **Refresh**."
+                    )
+                    world_handle.position = np.zeros(3, dtype=np.float32)
+                    reset_client_cameras(default_lookat, default_position)
+                notify(client, "Results refreshed", "No complete retarget results found.")
+                return
+
+            target = current_path if current_path in paths else paths[0]
+            if auto_load and target != current_path:
+                load_path(target, client)
+            else:
+                with state_lock:
+                    if active is not None and current_path in paths:
+                        show_clip_status(current_path, active["descriptor"])
+                    update_clip_navigation()
+                notify(client, "Results refreshed", f"Found {len(paths)} result(s).")
+
+        def seek(delta: int) -> None:
+            with state_lock:
+                active = state.get("active")
+                if active is None:
+                    return
+                frame = int(
+                    np.clip(
+                        int(state["frame"]) + int(delta),
+                        0,
+                        int(active["descriptor"]["frame_count"]) - 1,
+                    )
+                )
+            draw_frame(frame)
+
+        @refresh_button.on_click
+        def _refresh(event) -> None:
+            refresh_results(event.client)
+
+        if folder_dropdown is not None:
+            @folder_dropdown.on_update
+            def _select_folder(event) -> None:
+                nonlocal result_dir
+                selected = result_dirs.get(str(folder_dropdown.value))
+                if selected is None or selected == result_dir:
+                    return
+                with state_lock:
+                    if state["loading"] or state["recording"] or state["record_stopping"]:
+                        current_label = next(label for label, path in result_dirs.items() if path == result_dir)
+                        folder_dropdown.value = current_label
+                        notify(event.client, "Viewer busy", "Wait for loading or recording to finish.")
+                        return
+                    unload_active()
+                    state["paths"] = []
+                    state["label_to_path"] = {}
+                    set_clip_controls(False)
+                    result_dir = selected
+                    title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
+                refresh_results(event.client)
+
+        @result_dropdown.on_update
+        def _select_result(event) -> None:
+            with state_lock:
+                if bool(state["selector_write"]):
+                    return
+                selected_label = str(result_dropdown.value)
+                path = state["label_to_path"].get(selected_label)
+            if path is not None:
+                load_path(path, event.client)
+
+        def adjacent_clip(direction: int, client=None) -> None:
+            with state_lock:
+                active = state.get("active")
+                if active is None:
+                    return
+                paths = list(state["paths"])
+                try:
+                    index = paths.index(active["descriptor"]["path"])
+                except ValueError:
+                    return
+                jump = CLIP_JUMP_MULTIPLIERS[int(state["clip_jump_index"])]
+                index = int(np.clip(index + direction * jump, 0, len(paths) - 1))
+                target = paths[index]
+            load_path(target, client)
+
+        @previous_clip_button.on_click
+        def _previous_clip(event) -> None:
+            adjacent_clip(-1, event.client)
+
+        @next_clip_button.on_click
+        def _next_clip(event) -> None:
+            adjacent_clip(1, event.client)
+
+        @jump_down_button.on_click
+        def _jump_down(_event) -> None:
+            with state_lock:
+                set_clip_jump_index(int(state["clip_jump_index"]) - 1)
+
+        @jump_up_button.on_click
+        def _jump_up(_event) -> None:
+            with state_lock:
+                set_clip_jump_index(int(state["clip_jump_index"]) + 1)
+
+        @play_button.on_click
+        def _play_pause(_event) -> None:
+            with state_lock:
+                if state.get("active") is None:
+                    return
+                state["playing"] = not bool(state["playing"])
+                play_button.label = "Pause (Space)" if state["playing"] else "Play (Space)"
+
+        @reset_button.on_click
+        def _reset(_event) -> None:
+            draw_frame(0)
+
+        @step_back_button.on_click
+        def _step_back(_event) -> None:
+            seek(-1)
+
+        @step_forward_button.on_click
+        def _step_forward(_event) -> None:
+            seek(1)
+
+        @seek_back_button.on_click
+        def _seek_back(_event) -> None:
+            with state_lock:
+                active = state.get("active")
+                fps = 1.0 if active is None else float(active["descriptor"]["fps"])
+            seek(-max(1, int(round(fps))))
+
+        @seek_forward_button.on_click
+        def _seek_forward(_event) -> None:
+            with state_lock:
+                active = state.get("active")
+                fps = 1.0 if active is None else float(active["descriptor"]["fps"])
+            seek(max(1, int(round(fps))))
+
+        @frame_slider.on_update
+        def _frame_update(_event) -> None:
+            with state_lock:
+                if bool(state["slider_write"]):
+                    return
+            draw_frame(int(frame_slider.value))
+
+        @speed_slider.on_update
+        def _speed_update(_event) -> None:
+            with state_lock:
+                state["speed"] = float(speed_slider.value)
+
+        @loop_checkbox.on_update
+        def _loop_update(_event) -> None:
+            with state_lock:
+                state["loop"] = bool(loop_checkbox.value)
+
+        @com_checkbox.on_update
+        def _com_update(_event) -> None:
+            with state_lock, client.atomic():
+                active = state.get("active")
+                if active is not None:
+                    for handle in active["com_handles"]:
+                        handle.visible = bool(com_checkbox.value)
+
+        @camera_button.on_click
+        def _camera_update(event) -> None:
+            with state_lock:
+                active = state.get("active")
+                if active is None:
+                    return
+                enabled = not bool(state["follow_camera"])
+                client = event.client if event.client is not None else state.get("camera_client")
+                if client is not None:
+                    state["camera_client"] = client
+                if enabled:
+                    if str(args.camera_mode) == "root":
+                        if client is not None:
+                            try:
+                                state["follow_anchor"] = np.asarray(
+                                    client.camera.look_at, dtype=np.float64
+                                ).copy()
+                            except AssertionError:
+                                pass
+                    else:
+                        state["follow_anchor"] = active["initial_lookat"].copy()
+                        reset_nonroot_camera(active)
+                state["follow_camera"] = enabled
+                camera_button.label = f"Fixed camera (F): {'ON' if enabled else 'OFF'}"
+                camera_button.color = CAMERA_ACTIVE_COLOR if enabled else None
+                frame = int(state["frame"])
+            draw_frame(frame)
+
+        @snapshot_button.on_click
+        def _snapshot(event) -> None:
+            client = event.client
+            if client is None or state.get("active") is None:
+                return
+            try:
+                import imageio.v3 as iio
+                from PIL import Image
+
+                image = None
+                capture_scale = None
+                last_error = None
+                for scale in SNAPSHOT_SUPERSAMPLE_LEVELS:
+                    render_width = int(round(SNAPSHOT_WIDTH * scale))
+                    render_height = int(round(SNAPSHOT_HEIGHT * scale))
+                    try:
+                        with render_lock:
+                            client.flush()
+                            candidate = np.asarray(
+                                client.get_render(
+                                    height=render_height,
+                                    width=render_width,
+                                    transport_format="png",
+                                )
+                            )
+                        if candidate.ndim != 3 or candidate.shape[-1] not in (3, 4):
+                            raise RuntimeError(f"unexpected snapshot array shape: {candidate.shape}")
+                        if candidate.shape[:2] != (render_height, render_width):
+                            raise RuntimeError(
+                                f"unexpected snapshot size: {candidate.shape[1]}x{candidate.shape[0]}"
+                            )
+                        if candidate.shape[-1] == 4 and not np.any(candidate[..., 3]):
+                            raise RuntimeError("render is fully transparent")
+                        image = candidate
+                        capture_scale = scale
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        print(
+                            f"[{VIS_PREFIX}][Viser][WARN] {scale:g}x snapshot failed: {exc}",
+                            flush=True,
+                        )
+                if image is None or capture_scale is None:
+                    raise RuntimeError("All snapshot render sizes failed") from last_error
+                if image.shape[-1] == 4:
+                    alpha = image[..., 3:4].astype(np.float32) / 255.0
+                    image = np.clip(
+                        np.rint(image[..., :3].astype(np.float32) * alpha + 255.0 * (1.0 - alpha)),
+                        0.0,
+                        255.0,
+                    ).astype(np.uint8)
+                else:
+                    image = np.asarray(image[..., :3], dtype=np.uint8)
+                if image.shape[:2] != (SNAPSHOT_HEIGHT, SNAPSHOT_WIDTH):
+                    image = np.asarray(
+                        Image.fromarray(image, mode="RGB").resize(
+                            (SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT),
+                            resample=Image.Resampling.LANCZOS,
+                        ),
+                        dtype=np.uint8,
+                    )
+                content = iio.imwrite("<bytes>", image, extension=".png")
+                filename = time.strftime("umr_snapshot_%Y%m%d_%H%M%S.png")
+                client.send_file_download(filename, content, save_immediately=True)
+                notify(
+                    client,
+                    "Snapshot ready",
+                    f"{filename} · {SNAPSHOT_WIDTH}×{SNAPSHOT_HEIGHT} · {capture_scale:g}× SSAA",
+                )
+            except Exception as exc:
+                print(f"[{VIS_PREFIX}][Viser][WARN] snapshot failed: {exc}", flush=True)
+                notify(client, "Snapshot failed", str(exc), error=True)
+
+
+        def recording_finished(error: Exception | None, filename: str, frames: int) -> None:
+            with state_lock:
+                if bool(state["recording"]):
+                    state["playback_clock_reset"] = True
+                state["recording"] = False
+                state["record_stopping"] = False
+                state["recorder"] = None
+                has_active = state.get("active") is not None
+                has_paths = bool(state["paths"])
+            record_button.label = "Record screen (Ctrl+V)"
+            record_button.color = None
+            record_button.disabled = not has_active
+            result_dropdown.disabled = not has_paths
+            refresh_button.disabled = False
+            update_clip_navigation()
+            if error is None:
+                print(
+                    f"[{VIS_PREFIX}][Viser] saved recording {filename} "
+                    f"({frames} frames, {int(args.record_width)}x{int(args.record_height)})",
+                    flush=True,
+                )
+            else:
+                print(f"[{VIS_PREFIX}][Viser][WARN] recording failed: {error}", flush=True)
+
+        def toggle_recording(client) -> None:
+            with state_lock:
+                recorder = state.get("recorder")
+                if recorder is not None:
+                    if bool(state["record_stopping"]):
+                        return
+                    state["recording"] = False
+                    state["record_stopping"] = True
+                    state["playback_clock_reset"] = True
+                    record_button.label = "Finishing recording..."
+                    record_button.disabled = True
+                    recorder.request_stop()
+                    return
+
+                active = state.get("active")
+                if active is None or bool(state["loading"]):
+                    return
+                if client is None:
+                    print(
+                        f"[{VIS_PREFIX}][Viser][WARN] recording requested without a browser client.",
+                        flush=True,
+                    )
+                    return
+                descriptor = active["descriptor"]
+                video_fps = (
+                    float(args.record_fps)
+                    if float(args.record_fps) > 0.0
+                    else float(descriptor["fps"])
+                )
+                try:
+                    recorder = _ViserVideoRecorder(
+                        server=client,
+                        client=client,
+                        fps=video_fps,
+                        width=int(args.record_width),
+                        height=int(args.record_height),
+                        filename_prefix=descriptor["path"].stem,
+                        render_lock=render_lock,
+                        on_finished=recording_finished,
+                    )
+                    recorder.start()
+                except Exception as exc:
+                    notify(client, "Recording failed", str(exc), error=True)
+                    return
+                state["recorder"] = recorder
+                state["recording"] = True
+                state["record_stopping"] = False
+                state["playback_clock_reset"] = True
+                record_button.label = "Stop recording (Ctrl+V)"
+                record_button.color = CAMERA_ACTIVE_COLOR
+                result_dropdown.disabled = True
+                refresh_button.disabled = True
+                update_clip_navigation()
+                recorder.capture_frame()
+            notify(client, "Recording started", "Press Ctrl+V again to stop and download.")
+
+        @record_button.on_click
+        def _record(event) -> None:
+            toggle_recording(event.client)
+
+        _install_keyboard_shortcuts(
+            client,
+            {
+                "play": str(play_button._impl.uuid),
+                "reset": str(reset_button._impl.uuid),
+                "step_back": str(step_back_button._impl.uuid),
+                "step_forward": str(step_forward_button._impl.uuid),
+                "seek_back": str(seek_back_button._impl.uuid),
+                "seek_forward": str(seek_forward_button._impl.uuid),
+                "camera": str(camera_button._impl.uuid),
+                "snapshot": str(snapshot_button._impl.uuid),
+                "record": str(record_button._impl.uuid),
+                "prev_clip": str(previous_clip_button._impl.uuid),
+                "next_clip": str(next_clip_button._impl.uuid),
+                "jump_down": str(jump_down_button._impl.uuid),
+                "jump_up": str(jump_up_button._impl.uuid),
+            },
+        )
+
+        refresh_results(auto_load=True)
+
+        def playback_loop() -> None:
+            next_deadline = time.monotonic()
+            previous_tick = next_deadline
+            frame_accumulator = 0.0
+            schedule_key = None
+            while not stop_event.is_set():
+                with state_lock:
+                    active = state.get("active")
+                    playing = (
+                        bool(state["playing"])
+                        and not bool(state["loading"])
+                        and active is not None
+                    )
+                    speed = max(0.1, float(state["speed"]))
+                    if active is None:
+                        clip_key = None
+                        fps = 1.0
+                        frame_count = 1
+                    else:
+                        clip_key = active["root_path"]
+                        fps = max(float(active["descriptor"]["fps"]), 1e-6)
+                        frame_count = int(active["descriptor"]["frame_count"])
+                    recording = bool(state["recording"])
+                    record_stopping = bool(state["record_stopping"])
+                    reset_clock = bool(state["playback_clock_reset"])
+                    state["playback_clock_reset"] = False
+                if reset_clock:
+                    schedule_key = None
+                    frame_accumulator = 0.0
+                if not playing:
+                    schedule_key = None
+                    frame_accumulator = 0.0
                     stop_event.wait(0.01)
                     continue
+
+                if recording:
+                    schedule_key = None
+                    frame_accumulator = 0.0
+                    if record_stopping:
+                        stop_event.wait(0.01)
+                        continue
+                    with state_lock:
+                        if state.get("active") is None or state["active"]["root_path"] != clip_key:
+                            continue
+                        next_frame = int(state["frame"]) + 1
+                        if next_frame >= frame_count:
+                            if bool(state["loop"]):
+                                next_frame = 0
+                            else:
+                                next_frame = frame_count - 1
+                                state["playing"] = False
+                                play_button.label = "Play (Space)"
+                    draw_frame(next_frame)
+                    stop_event.wait(0.001)
+                    continue
+
+                if not bool(args.rate_limit):
+                    with state_lock:
+                        next_frame = int(state["frame"]) + 1
+                        if next_frame >= frame_count:
+                            if bool(state["loop"]):
+                                next_frame = 0
+                            else:
+                                next_frame = frame_count - 1
+                                state["playing"] = False
+                                play_button.label = "Play (Space)"
+                    draw_frame(next_frame)
+                    stop_event.wait(0.001)
+                    continue
+
+                scene_update_fps = min(fps * speed, 60.0)
+                period = 1.0 / max(scene_update_fps, 1e-6)
+                now = time.monotonic()
+                new_schedule_key = (clip_key, speed)
+                if schedule_key != new_schedule_key:
+                    next_deadline = now + period
+                    previous_tick = now
+                    frame_accumulator = 0.0
+                    schedule_key = new_schedule_key
+                remaining = next_deadline - now
+                if remaining > 0.0:
+                    stop_event.wait(min(remaining, 0.05))
+                    continue
+                elapsed = max(0.0, now - previous_tick)
+                previous_tick = now
+                frame_accumulator += elapsed * fps * speed
+                steps = int(frame_accumulator + 1e-9)
+                if steps <= 0:
+                    next_deadline += period
+                    continue
+                frame_accumulator -= steps
                 with state_lock:
                     if state.get("active") is None or state["active"]["root_path"] != clip_key:
+                        schedule_key = None
                         continue
-                    next_frame = int(state["frame"]) + 1
+                    next_frame = int(state["frame"]) + steps
                     if next_frame >= frame_count:
                         if bool(state["loop"]):
-                            next_frame = 0
+                            next_frame %= frame_count
                         else:
                             next_frame = frame_count - 1
                             state["playing"] = False
                             play_button.label = "Play (Space)"
                 draw_frame(next_frame)
-                stop_event.wait(0.001)
-                continue
-
-            if not bool(args.rate_limit):
-                with state_lock:
-                    next_frame = int(state["frame"]) + 1
-                    if next_frame >= frame_count:
-                        if bool(state["loop"]):
-                            next_frame = 0
-                        else:
-                            next_frame = frame_count - 1
-                            state["playing"] = False
-                            play_button.label = "Play (Space)"
-                draw_frame(next_frame)
-                stop_event.wait(0.001)
-                continue
-
-            scene_update_fps = min(fps * speed, 60.0)
-            period = 1.0 / max(scene_update_fps, 1e-6)
-            now = time.monotonic()
-            new_schedule_key = (clip_key, speed)
-            if schedule_key != new_schedule_key:
-                next_deadline = now + period
-                previous_tick = now
-                frame_accumulator = 0.0
-                schedule_key = new_schedule_key
-            remaining = next_deadline - now
-            if remaining > 0.0:
-                stop_event.wait(min(remaining, 0.05))
-                continue
-            elapsed = max(0.0, now - previous_tick)
-            previous_tick = now
-            frame_accumulator += elapsed * fps * speed
-            steps = int(frame_accumulator + 1e-9)
-            if steps <= 0:
                 next_deadline += period
-                continue
-            frame_accumulator -= steps
-            with state_lock:
-                if state.get("active") is None or state["active"]["root_path"] != clip_key:
-                    schedule_key = None
-                    continue
-                next_frame = int(state["frame"]) + steps
-                if next_frame >= frame_count:
-                    if bool(state["loop"]):
-                        next_frame %= frame_count
-                    else:
-                        next_frame = frame_count - 1
-                        state["playing"] = False
-                        play_button.label = "Play (Space)"
-            draw_frame(next_frame)
-            next_deadline += period
-            now = time.monotonic()
-            if next_deadline < now:
-                next_deadline = now + period
+                now = time.monotonic()
+                if next_deadline < now:
+                    next_deadline = now + period
 
-    playback_thread = threading.Thread(
-        target=playback_loop,
-        name="umr-viser-folder-playback",
-        daemon=True,
-    )
-    playback_thread.start()
+        playback_thread = threading.Thread(
+            target=playback_loop,
+            name="umr-viser-folder-playback",
+            daemon=True,
+        )
+        playback_thread.start()
+
+        def cleanup() -> None:
+            stop_event.set()
+            playback_thread.join(timeout=1.0)
+            with state_lock:
+                recorder = state.get("recorder")
+            if recorder is not None:
+                recorder.request_stop()
+                recorder.join(timeout=10.0)
+            with state_lock:
+                unload_active()
+
+        return cleanup
+
+    sessions_lock = threading.Lock()
+    sessions = {}
+
+    @server.on_client_connect
+    def _on_client_connect(client) -> None:
+        with sessions_lock:
+            admitted = len(sessions) < max_clients
+            if admitted:
+                sessions[client.client_id] = None
+        if not admitted:
+            client.gui.add_markdown(
+                f"**Viewer is full**\n\nMaximum {max_clients} active sessions. "
+                "Close another viewer tab and reload this page."
+            )
+            print(f"[{VIS_PREFIX}][Viser] client {client.client_id} rejected: viewer full", flush=True)
+            return
+        try:
+            cleanup = start_client_session(client)
+        except Exception:
+            with sessions_lock:
+                sessions.pop(client.client_id, None)
+            raise
+        with sessions_lock:
+            connected = client.client_id in sessions
+            if connected:
+                sessions[client.client_id] = cleanup
+        if not connected:
+            cleanup()
+        print(f"[{VIS_PREFIX}][Viser] browser connected: {client.client_id}", flush=True)
+
+    @server.on_client_disconnect
+    def _on_client_disconnect(client) -> None:
+        with sessions_lock:
+            cleanup = sessions.pop(client.client_id, None)
+        if cleanup is not None:
+            cleanup()
+        print(f"[{VIS_PREFIX}][Viser] browser disconnected: {client.client_id}", flush=True)
+
     print(
         f"[{VIS_PREFIX}][Viser] watching batch folder on manual refresh: {result_dir}",
         flush=True,
@@ -1268,13 +1312,10 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
     except KeyboardInterrupt:
         pass
     finally:
-        stop_event.set()
-        playback_thread.join(timeout=1.0)
-        with state_lock:
-            recorder = state.get("recorder")
-        if recorder is not None:
-            recorder.request_stop()
-            recorder.join(timeout=10.0)
-        with state_lock:
-            unload_active()
+        with sessions_lock:
+            cleanups = list(sessions.values())
+            sessions.clear()
+        for cleanup in cleanups:
+            if cleanup is not None:
+                cleanup()
         server.stop()

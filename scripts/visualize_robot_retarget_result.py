@@ -79,6 +79,10 @@ def parse_args():
         help="Serve the code-defined result folders with a folder selector on the local network.",
     )
     parser.add_argument(
+        "--viewer-max-clients", type=int, default=4, metavar="N",
+        help="Maximum simultaneous viewer sessions (default: 4).",
+    )
+    parser.add_argument(
         "--result-format",
         choices=("umr", "canonical"),
         default="umr",
@@ -3559,6 +3563,8 @@ def prepare_canonical_viser_clip(args, result_path: Path) -> dict:
 
 def main():
     args = parse_args()
+    if args.viewer_max_clients < 1:
+        raise ValueError("--viewer-max-clients must be at least 1.")
     if args.lan_viewer:
         if args.result_dir is not None or args.result_format != "umr":
             raise ValueError("--lan-viewer uses its own UMR result folders; omit --result-dir and --result-format.")
