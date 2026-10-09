@@ -32,8 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MOTION_NAME = "motion_actor_smplx.npz"
 DEFAULT_INPUT = ROOT.parent / "motion_datas/HiPHI_origin"
 DEFAULT_OUTPUT = ROOT / "sample_data/hiphi"
-LOCAL_MODEL_EXAMPLE = ROOT.parent / "motion_datas/models_smplx_v1_1/models/smplx/SMPLX_NEUTRAL.npz"
-LOCAL_BETA_FIT_EXAMPLE = ROOT.parent / "BVH2SMPL/src/rendering_utils/smpl"
+LOCAL_MODEL_EXAMPLE = ROOT / "external_assets/hiphi/SMPLX_NEUTRAL.npz"
+LOCAL_BETA_FIT_EXAMPLE = ROOT / "external_assets/hiphi/beta_fit"
 DEFAULT_MODEL = LOCAL_MODEL_EXAMPLE if LOCAL_MODEL_EXAMPLE.is_file() else None
 DEFAULT_BETA_FIT_DATA = (LOCAL_BETA_FIT_EXAMPLE if all(
     (LOCAL_BETA_FIT_EXAMPLE / name).is_file()
@@ -62,6 +62,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta-fit-data", type=Path, default=DEFAULT_BETA_FIT_DATA,
                         help="Directory with neutral_smpl_mean_params.h5 and gmm_08.pkl (uses local files when available)")
     parser.add_argument("--beta-device", default="cuda:0", help="Shape-fitting device (e.g. cpu)")
+    parser.add_argument("--beta-iters", type=int, default=100,
+                        help="Maximum iterations in each beta-fitting optimization step (default: 100)")
+    parser.add_argument("--mink-iters", type=int, default=10,
+                        help="Maximum body IK iterations per frame (default: 10)")
     parser.add_argument("--converter", default="hiphi2smplx", help="Official fitter executable")
     parser.add_argument("--seq-key", action="append", default=[],
                         help="Motion ID or frame/lu/motion_id; repeatable")
@@ -83,6 +87,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--limit must be nonnegative")
     if args.workers < 1:
         parser.error("--workers must be at least 1")
+    if args.beta_iters < 1:
+        parser.error("--beta-iters must be at least 1")
+    if args.mink_iters < 1:
+        parser.error("--mink-iters must be at least 1")
     if not args.input.is_dir():
         parser.error(f"HiPHI input root does not exist: {args.input}")
     if args.input != args.output and (args.input in args.output.parents or args.output in args.input.parents):
@@ -263,12 +271,13 @@ def fit_bvh(source_bvh: Path, target: Path, args: argparse.Namespace, expected_f
         raise FileNotFoundError("BVH fitting requires --model-path pointing to SMPLX_NEUTRAL.npz")
     if not args.fit_betas and args.betas is None:
         raise ValueError("BVH fitting requires --betas or --fit-betas")
-    command = [args.converter, "--input-bvh", str(source_bvh), "--model-path", str(args.model_path)]
+    command = [args.converter, "--input-bvh", str(source_bvh), "--model-path", str(args.model_path),
+               "--mink-iters", str(args.mink_iters)]
     if args.fit_betas:
         if args.beta_fit_data is None or not args.beta_fit_data.is_dir():
             raise FileNotFoundError("--fit-betas requires --beta-fit-data directory")
         command.extend(["--fit-betas", "--beta-fit-data", str(args.beta_fit_data),
-                        "--beta-device", args.beta_device])
+                        "--beta-device", args.beta_device, "--beta-iters", str(args.beta_iters)])
     else:
         if not args.betas.is_file():
             raise FileNotFoundError(args.betas)

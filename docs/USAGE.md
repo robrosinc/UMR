@@ -60,10 +60,13 @@ hf download lightcone02/OmniContact-Dataset \
 ### BONES-SEED
 `bash scripts/convert_bones_seed_to_umr.sh`
 ### HiPHI
-`bash scripts/convert_hiphi_to_umr.sh --plan`
+`bash scripts/convert_hiphi_to_umr.sh --plan --limit 5`
+`bash scripts/convert_hiphi_to_umr.sh --workers 4` converts four clips concurrently
+(the default); use `--workers 1` for sequential fitting. Completed clips are
+reused when restarted.
 
-See [the HiPHI adapter guide](../sample_data/hiphi/README.md) for archive
-extraction and the required SMPL-X model/shape options.
+See [the HiPHI adapter guide](../sample_data/hiphi/README.md) for direct archive
+conversion and the required SMPL-X model/shape options.
 ### OmniContact
 `bash scripts/convert_omnicontact_to_umr.sh`
 ### 

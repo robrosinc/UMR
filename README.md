@@ -110,7 +110,8 @@ smpl/SMPLX_NEUTRAL.npz
 
 Add `SMPLX_MALE` and `SMPLX_FEMALE` in either format when a sequence requires
 those genders. The NPZ path has been tested with both neutral SMPL-X motion and
-female OMOMO motion.
+female OMOMO motion. HiPHI conversion keeps its NPZ model and beta-fitting
+resources in `external_assets/hiphi/`; see the [HiPHI adapter guide](sample_data/hiphi/README.md).
 
 The GRAIL example applies its bundled G1-SMPL-X template and pose-corrective
 overlay to the user-provided neutral SMPL-X model at runtime; the derived baked
@@ -209,6 +210,45 @@ python scripts/visualize_robot_retarget_result.py \
 Open the clickable `Network` URL printed in the terminal.
 
 Use **Refresh** to load new results while batch retargeting is running.
+
+### LAN result viewer
+
+The LAN viewer uses the same Viser controls and adds a **Directory**
+selector for Bones Seed, LAFAN1, OMOMO Dummy, AMASS, GRAIL, and OmniContact. The allowed folders are
+defined relative to this repository in `LAN_RESULT_DIRS` in
+`scripts/visualize_robot_retarget_result.py`. Each browser connection has its
+own directory, clip, playback, camera, and capture controls. Reloading the page
+starts a new session.
+
+Run it in a terminal with:
+
+```bash
+bash scripts/viewer_lan.sh
+```
+
+The script binds to this computer's current LAN address and prints the URL
+(`http://LAN-IP:8081`). Open that address from another device on the building
+network. Stop the viewer with Ctrl+C. It does not start at boot or create a
+public internet address. On a host with multiple network interfaces, set the
+binding address explicitly, for example
+`UMR_VIEWER_HOST=10.1.0.25 bash scripts/viewer_lan.sh`.
+By default, up to four active viewer sessions are admitted. To change this,
+run `UMR_VIEWER_MAX_CLIENTS=2 bash scripts/viewer_lan.sh` (or pass
+`--viewer-max-clients 2` to the Python entry point). Extra visitors see a
+"Viewer is full" message until a viewer tab closes; they can then reload.
+
+To run this viewer from a different checkout or server, copy the result `.npz`
+files and the tracked `assets/igris_c/` directory, including its `meshes/`
+subdirectory. The thousands of per-clip `*.floating_mjcf.xml` files are not
+needed for these four folders: the viewer uses `igris_c.xml` for Bones Seed,
+LAFAN1, and AMASS, and `igris_c_dummy_hand.xml` for OMOMO Dummy when a saved
+per-clip XML is absent. Saved absolute asset paths are resolved in the new
+checkout. For OMOMO object rendering, copy the sequence `*.xml` and
+`prop_*.csv` files under both `sample_data/omomo/train/` and
+`sample_data/omomo/test/`, plus the referenced meshes under
+`sample_data/omomo/object_mjcf/assets/`. The viewer resolves the saved source
+paths in the new checkout; pose arrays and body-model parameters are not needed
+for object display.
 
 ## Batch Retargeting
 
