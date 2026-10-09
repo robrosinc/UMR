@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import zipfile
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,10 +70,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--converter", default="hiphi2smplx", help="Official fitter executable")
     parser.add_argument("--seq-key", action="append", default=[],
                         help="Motion ID or frame/lu/motion_id; repeatable")
+    parser.add_argument("--exclude-seq-key", action="append", default=[],
+                        help="Skip this motion ID or frame/lu/motion_id; repeatable")
     parser.add_argument("--limit", type=int, default=0, help="Maximum selected sequences; 0 means all")
     parser.add_argument("--workers", type=int, default=4,
                         help="Concurrent clip conversions within each archive (default: 4)")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing converted motion")
+    parser.add_argument("--skip-errors", action="store_true",
+                        help="Continue after individual clip failures and save diagnostics under output/conversion_errors")
     parser.add_argument("--plan", action="store_true", help="Show selected packages without changing files")
     args = parser.parse_args()
     if not args.fit_betas and args.betas is None and args.beta_fit_data is not None:
@@ -290,7 +295,10 @@ def fit_bvh(source_bvh: Path, target: Path, args: argparse.Namespace, expected_f
         if args.workers > 1:
             for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
                 env[name] = "1"
-        subprocess.run(command, check=True, env=env)
+        completed = subprocess.run(command, check=True, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, errors="replace")
+        if completed.stdout:
+            print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n", flush=True)
         check_motion(temp_path, expected_frames, expected_fps)
         temp_path.replace(target)
 
@@ -374,27 +382,51 @@ def validate_fit_setup(args: argparse.Namespace) -> None:
         raise ValueError("HiPHI BVH fitting prerequisites are missing:\n  - " + "\n  - ".join(errors))
 
 
+def failure_log_path(item: Sequence, args: argparse.Namespace) -> Path:
+    return args.output / "conversion_errors" / item.relative.parent / f"{item.relative.name}.log"
+
+
+def record_clip_result(index: int, item: Sequence, source_root: Path,
+                       args: argparse.Namespace, total: int) -> str:
+    log_path = failure_log_path(item, args)
+    try:
+        action = process_sequence(item, source_root, args)
+    except Exception as error:
+        if not args.skip_errors:
+            if isinstance(error, subprocess.CalledProcessError) and error.stdout:
+                print(error.stdout, file=sys.stderr, end="" if error.stdout.endswith("\n") else "\n", flush=True)
+            raise
+        details = traceback.format_exc()
+        if isinstance(error, subprocess.CalledProcessError) and error.stdout:
+            details += "\nhiphi2smplx output:\n" + error.stdout
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(details, encoding="utf-8")
+        print(f"[HiPHI][{index}/{total}] failed: {item.relative} ({error}); log={log_path}",
+              file=sys.stderr, flush=True)
+        return "failed"
+    log_path.unlink(missing_ok=True)
+    print(f"[HiPHI][{index}/{total}] {action}: {item.relative}", flush=True)
+    return action
+
+
 def process_group(items: list[tuple[int, Sequence]], source_root: Path,
                   args: argparse.Namespace, total: int) -> Counter:
     """Process independent clips while keeping archive extraction alive."""
     counts: Counter = Counter()
     if args.workers == 1:
         for index, item in items:
-            action = process_sequence(item, source_root, args)
-            print(f"[HiPHI][{index}/{total}] {action}: {item.relative}", flush=True)
+            action = record_clip_result(index, item, source_root, args, total)
             counts[action] += 1
         return counts
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(process_sequence, item, source_root, args): (index, item)
+            executor.submit(record_clip_result, index, item, source_root, args, total): (index, item)
             for index, item in items
         }
         try:
             for future in as_completed(futures):
-                index, item = futures[future]
                 action = future.result()
-                print(f"[HiPHI][{index}/{total}] {action}: {item.relative}", flush=True)
                 counts[action] += 1
         except BaseException:
             for future in futures:
@@ -407,6 +439,10 @@ def main() -> int:
     args = parse_args()
     try:
         selected = discover(args.input, args.seq_key, args.limit)
+        if args.exclude_seq_key:
+            excluded = set(args.exclude_seq_key)
+            selected = [item for item in selected if item.relative.name not in excluded
+                        and item.relative.as_posix() not in excluded]
         print(f"[HiPHI] input={args.input} output={args.output} sequences={len(selected)} workers={args.workers}")
         counts: Counter = Counter()
         if args.plan:
@@ -439,7 +475,11 @@ def main() -> int:
                 source_root = Path(temporary)
                 extract_archive(archive, [item for _, item in items], source_root)
                 counts.update(process_group(items, source_root, args, len(selected)))
-        print(f"[HiPHI] complete fitted={counts['fit']} copied={counts['copy']} reused={counts['reuse']}")
+        print(f"[HiPHI] complete fitted={counts['fit']} copied={counts['copy']} "
+              f"reused={counts['reuse']} failed={counts['failed']}")
+        if counts["failed"]:
+            print(f"[HiPHI] failure logs: {args.output / 'conversion_errors'}", file=sys.stderr)
+            return 1
         return 0
     except (FileNotFoundError, FileExistsError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"[HiPHI] error: {error}", file=sys.stderr)
