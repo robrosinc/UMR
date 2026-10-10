@@ -18,7 +18,6 @@ MUJOCO_LOG.TXT
 # Local/editor artifacts
 .DS_Store
 .idea/
-.vscode/
 *.orig
 *.swp
 node_modules/
@@ -27,6 +26,7 @@ node_modules/
 smpl/*.pkl
 smpl/*.npz
 smpl/*.zip
+temp_auto_push.bat
 
 # User-downloaded or locally converted third-party datasets/assets
 sample_data/bones-seed/motions_uniform/
@@ -56,3 +56,5 @@ sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/*
 !sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/metadata.json
 !sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/motion_actor_smplx.npz
 sample_data/hiphi/object_meshes/
+.gitignore
+branch_structure.json

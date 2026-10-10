@@ -35,7 +35,9 @@ from viser_mujoco_viewer import (
 
 
 EMPTY_OPTION = "No results found"
+SELECT_OPTION = "Select a clip"
 CLIP_JUMP_MULTIPLIERS = (1, 10, 100, 1000)
+RESULT_PAGE_SIZE = 100
 
 
 def scan_result_files(result_dir: Path) -> list[Path]:
@@ -263,6 +265,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             "active": None,
             "paths": [],
             "label_to_path": {},
+            "result_page": 0,
             "frame": 0,
             "clip_jump_index": 0,
             "playing": not bool(args.paused),
@@ -297,6 +300,9 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                 if result_dirs else None
             )
             result_dropdown = client.gui.add_dropdown("Result clip", (EMPTY_OPTION,), disabled=True)
+            page_status = client.gui.add_markdown("0 results")
+            previous_page_button = client.gui.add_button("Previous page", disabled=True)
+            next_page_button = client.gui.add_button("Next page", disabled=True)
             refresh_button = client.gui.add_button("Refresh")
             previous_clip_button = client.gui.add_button("Previous 1 clip (←)", disabled=True)
             next_clip_button = client.gui.add_button("Next 1 clip (→)", disabled=True)
@@ -357,8 +363,42 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             for control in clip_controls:
                 control.disabled = not enabled
 
+        def update_result_page(focus_path: Path | None = None) -> None:
+            """Send only one page of result names to the browser."""
+            paths = state["paths"]
+            if focus_path is not None:
+                try:
+                    state["result_page"] = paths.index(focus_path) // RESULT_PAGE_SIZE
+                except ValueError:
+                    pass
+            page_count = max(1, (len(paths) + RESULT_PAGE_SIZE - 1) // RESULT_PAGE_SIZE)
+            page = min(max(0, state["result_page"]), page_count - 1)
+            state["result_page"] = page
+            page_paths = paths[page * RESULT_PAGE_SIZE:(page + 1) * RESULT_PAGE_SIZE]
+            labels, state["label_to_path"] = _result_labels(result_dir, page_paths)
+            active = state.get("active")
+            selected_path = focus_path
+            if selected_path is None and active is not None:
+                selected_path = active["descriptor"]["path"]
+            state["selector_write"] = True
+            try:
+                result_dropdown.options = (SELECT_OPTION, *labels) if labels else (EMPTY_OPTION,)
+                if labels:
+                    selected = next(
+                        (label for label, path in state["label_to_path"].items() if path == selected_path),
+                        SELECT_OPTION,
+                    )
+                    result_dropdown.value = selected
+            finally:
+                state["selector_write"] = False
+            page_status.content = f"**{len(paths):,} results** · page {page + 1:,}/{page_count:,}"
+            busy = state["loading"] or state["recording"] or state["record_stopping"]
+            previous_page_button.disabled = busy or page == 0
+            next_page_button.disabled = busy or page >= page_count - 1
+            result_dropdown.disabled = busy or not bool(labels)
+
         def update_clip_navigation() -> None:
-            paths = list(state["paths"])
+            paths = state["paths"]
             active = state.get("active")
             current_path = None if active is None else active["descriptor"]["path"]
             try:
@@ -372,6 +412,9 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             )
             previous_clip_button.disabled = busy or index <= 0
             next_clip_button.disabled = busy or index < 0 or index >= len(paths) - 1
+            page_count = max(1, (len(paths) + RESULT_PAGE_SIZE - 1) // RESULT_PAGE_SIZE)
+            previous_page_button.disabled = busy or state["result_page"] == 0
+            next_page_button.disabled = busy or state["result_page"] >= page_count - 1
 
         def set_clip_jump_index(index: int) -> None:
             index = int(np.clip(index, 0, len(CLIP_JUMP_MULTIPLIERS) - 1))
@@ -625,15 +668,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                 print(f"[{VIS_PREFIX}][Viser][WARN] clip cleanup failed: {exc}", flush=True)
 
         def select_dropdown_path(path: Path) -> None:
-            label = next(
-                (label for label, candidate in state["label_to_path"].items() if candidate == path),
-                None,
-            )
-            if label is None:
-                return
-            state["selector_write"] = True
-            result_dropdown.value = label
-            state["selector_write"] = False
+            update_result_page(path)
 
         def show_clip_status(path: Path, descriptor: dict) -> None:
             paths = state["paths"]
@@ -749,18 +784,11 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                 notify(client, "Viewer busy", message)
                 return
             paths = scan_results(result_dir)
-            labels, mapping = _result_labels(result_dir, paths)
             with state_lock:
                 active = state.get("active")
                 current_path = None if active is None else active["descriptor"]["path"]
                 state["paths"] = paths
-                state["label_to_path"] = mapping
-                state["selector_write"] = True
-                result_dropdown.options = tuple(labels) if labels else (EMPTY_OPTION,)
-                if current_path in paths:
-                    select_dropdown_path(current_path)
-                state["selector_write"] = False
-                result_dropdown.disabled = not bool(paths)
+                update_result_page()
                 update_clip_navigation()
 
             if not paths:
@@ -805,6 +833,18 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
         def _refresh(event) -> None:
             refresh_results(event.client)
 
+        @previous_page_button.on_click
+        def _previous_page(_event) -> None:
+            with state_lock:
+                state["result_page"] -= 1
+                update_result_page()
+
+        @next_page_button.on_click
+        def _next_page(_event) -> None:
+            with state_lock:
+                state["result_page"] += 1
+                update_result_page()
+
         if folder_dropdown is not None:
             @folder_dropdown.on_update
             def _select_folder(event) -> None:
@@ -821,6 +861,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                     unload_active()
                     state["paths"] = []
                     state["label_to_path"] = {}
+                    state["result_page"] = 0
                     set_clip_controls(False)
                     result_dir = selected
                     title_markdown.content = f"**{title}**  \nBatch folder: `{result_dir}`"
