@@ -1,0 +1,11 @@
+{
+  "extends": "humanoid_retarget_igris_c_example.json",
+  "robot": {
+    "name": "igris_c_dummy_hand",
+    "xml": "../assets/igris_c/igris_c_dummy_hand.xml",
+    "slot_geom_names": {
+      "leftHand": "Left_Palm_binding_visual",
+      "rightHand": "Right_Palm_binding_visual"
+    }
+  }
+}

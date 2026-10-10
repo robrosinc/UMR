@@ -1,0 +1,12 @@
+{
+  "extends": "humanoid_retarget_defaults_hiphi.json",
+  "solver": {
+    "robot_object_hard_constraint": false,
+    "robot_object_penetration_soft_cost": 0.0
+  },
+  "hsi_hoi": {
+    "object": {
+      "prefer_obj_for_contact": true
+    }
+  }
+}

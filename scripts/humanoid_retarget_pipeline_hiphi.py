@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "scripts" / "humanoid_retarget_pipeline_hsi_hoi.py"
 DEFAULTS = ROOT / "humanoid_retarget_defaults_hiphi.json"
-DEFAULT_CONFIG = ROOT / "robot_configs" / "humanoid_retarget_unitree_g1_example.json"
+DEFAULT_CONFIG = ROOT / "robot_configs" / "humanoid_retarget_igris_c_hiphi.json"
 
 
 def main() -> None:

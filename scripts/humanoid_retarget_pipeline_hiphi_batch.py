@@ -45,8 +45,9 @@ except ImportError:
 
 
 PYTHON = sys.executable
-DEFAULT_CONFIG = ROOT / "robot_configs" / "humanoid_retarget_unitree_g1_example.json"
+DEFAULT_CONFIG = ROOT / "robot_configs" / "humanoid_retarget_igris_c_hiphi.json"
 DEFAULT_DEFAULTS = ROOT / "humanoid_retarget_defaults_hiphi.json"
+CONTACT_ONLY_DEFAULTS = ROOT / "humanoid_retarget_defaults_hiphi_contact_only.json"
 DEFAULT_BATCH_CONFIG = ROOT / "humanoid_retarget_defaults_batch_hiphi.json"
 
 
@@ -56,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--defaults", type=Path, default=DEFAULT_DEFAULTS, help="HiPHI source and solver defaults.")
     parser.add_argument("--batch-config", type=Path, default=DEFAULT_BATCH_CONFIG)
     parser.add_argument("--data-root", type=Path, default=None, help="HiPHI root containing data/ and object_meshes/.")
+    parser.add_argument("--contact-only", action="store_true",
+                        help="Use raw OBJ contact fitting without convex decomposition or robot-object penetration constraints.")
     parser.add_argument("--sequence", action="append", default=None, help="Only process this motion id; repeatable.")
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--workers", type=int, default=None, help="Parallel retarget jobs. Default is deliberately 1.")
@@ -97,6 +100,7 @@ def safe_name(value: str) -> str:
 def discover_sequences(data_root: Path, requested: list[str] | None, limit: int) -> list[Path]:
     search_root = data_root / "data" if (data_root / "data").is_dir() else data_root
     sequences = []
+    incomplete = 0
     for metadata_path in sorted(search_root.rglob("metadata.json")):
         sequence_dir = metadata_path.parent
         try:
@@ -104,8 +108,10 @@ def discover_sequences(data_root: Path, requested: list[str] | None, limit: int)
         except (ValueError, FileNotFoundError, json.JSONDecodeError):
             continue
         if not (sequence_dir / "motion_actor_smplx.npz").is_file():
-            raise FileNotFoundError(f"HiPHI SMPL-X motion not found: {sequence_dir / 'motion_actor_smplx.npz'}")
+            incomplete += 1
+            continue
         sequences.append(sequence_dir.resolve())
+    print(f"[HiPHIBatch] ready={len(sequences)} fitting_or_incomplete={incomplete}", flush=True)
     sequences = sorted(set(sequences))
     if requested:
         requested_set = {str(value) for value in requested}
@@ -121,7 +127,7 @@ def discover_sequences(data_root: Path, requested: list[str] | None, limit: int)
         }
         missing = sorted(requested_set - matched)
         if missing:
-            raise FileNotFoundError(f"HiPHI motion ids not found under {search_root}: {missing}")
+            raise FileNotFoundError(f"HiPHI motion ids not found or not converted under {search_root}: {missing}")
         sequences = selected
     if limit > 0:
         sequences = sequences[:limit]
@@ -477,6 +483,14 @@ def main() -> None:
     args.config = resolve_repo_path(args.config)
     args.defaults = resolve_repo_path(args.defaults)
     args.batch_config = resolve_repo_path(args.batch_config)
+    if args.contact_only:
+        if args.defaults != DEFAULT_DEFAULTS:
+            raise ValueError("--contact-only cannot be combined with a custom --defaults file")
+        if args.force_object_preprocess or args.object_only:
+            raise ValueError("--contact-only cannot be combined with object preprocessing options")
+        args.defaults = CONTACT_ONLY_DEFAULTS
+        if args.output_root is None:
+            args.output_root = ROOT / "output/batch_retarget_hiphi_contact_only"
     batch_config = load_json(args.batch_config)
     batch = section(batch_config, "batch")
     batch_retarget = section(batch_config, "retarget")
@@ -538,6 +552,13 @@ def main() -> None:
 
     sequences = discover_sequences(data_root, args.sequence, int(args.limit))
     config = load_config(args.config)
+    compatibility_config = load_hsi_hoi_config(args.config, args.defaults)
+    solver_config = section(compatibility_config, "solver")
+    if args.contact_only and (
+        bool(solver_config.get("robot_object_hard_constraint", False))
+        or float(solver_config.get("robot_object_penetration_soft_cost", 0.0)) > 0.0
+    ):
+        raise ValueError("--contact-only requires robot-object penetration constraints to be disabled")
     robot_name = safe_name(robot_config(config)["name"])
     result_root = output_root / robot_name
     summary_path = result_root / "batch_summary.json"
@@ -551,15 +572,19 @@ def main() -> None:
         f"retarget_workers={workers}"
     )
 
-    object_results = prepare_objects(
-        objects,
-        object_settings,
-        workers=object_workers,
-        cpu_threads=object_cpu_threads,
-        force=args.force_object_preprocess,
-        dry_run=args.dry_run,
-        progress_bars=progress_bars,
-    )
+    if args.contact_only:
+        print("[HiPHIBatch] contact-only: using raw OBJ surfaces; skipping CoACD object preprocessing")
+        object_results = []
+    else:
+        object_results = prepare_objects(
+            objects,
+            object_settings,
+            workers=object_workers,
+            cpu_threads=object_cpu_threads,
+            force=args.force_object_preprocess,
+            dry_run=args.dry_run,
+            progress_bars=progress_bars,
+        )
     object_failures = [item for item in object_results if item["status"] == "failed"]
     base_summary: dict[str, Any] = {
         "robot": robot_name,
@@ -572,6 +597,7 @@ def main() -> None:
         "retarget_gpus": retarget_gpus,
         "stream_chunk_frames": stream_chunk_frames,
         "objects": object_results,
+        "contact_only": args.contact_only,
     }
     if object_failures:
         base_summary["results"] = []
@@ -582,7 +608,6 @@ def main() -> None:
         write_summary(summary_path, base_summary, args.dry_run)
         return
 
-    compatibility_config = load_hsi_hoi_config(args.config, args.defaults)
     shared_config_value = section(compatibility_config, "correspondence").get("shared_config")
     if not shared_config_value:
         raise ValueError("HiPHI batch config requires correspondence.shared_config")

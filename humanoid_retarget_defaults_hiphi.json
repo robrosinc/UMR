@@ -10,8 +10,8 @@
   },
   "correspondence": {
     "reuse_across_smplx_betas": true,
-    "shared_config": "robot_configs/humanoid_retarget_unitree_g1_hiphi_shared_correspondence.json",
-    "slots": "output/correspondence_unitree_g1_smplx_neutral_betas_b80de5d138/correspondence_slots_final.npz",
+    "shared_config": "robot_configs/humanoid_retarget_igris_c_hiphi_shared_correspondence.json",
+    "slots": "output/correspondence_igris_c_dummy_hand_smplx_neutral_betas_b80de5d138/correspondence_slots_final.npz",
     "slots_field": "reconstructed_slots",
     "smpl_name": "smplx_neutral_betas_b80de5d138",
     "shared_smplx_template": {
@@ -30,7 +30,7 @@
         0
       ],
       "model_dir": "smpl",
-      "surface_binding": "output/correspondence_unitree_g1_smplx_neutral_betas_b80de5d138/smplx_surface_binding.npz"
+      "surface_binding": "output/correspondence_igris_c_dummy_hand_smplx_neutral_betas_b80de5d138/smplx_surface_binding.npz"
     }
   },
   "motion": {

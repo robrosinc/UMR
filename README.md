@@ -309,14 +309,13 @@ For a complete converted HiPHI dataset, the dedicated batch runner prepares
 missing convex object assets and retargets all discovered sequences:
 
 ```bash
-python scripts/humanoid_retarget_pipeline_hiphi_batch.py \
-  --config robot_configs/humanoid_retarget_unitree_g1_example.json
+bash scripts/humanoid_retarget_pipeline_hiphi_batch.sh
 ```
 
 Its object preprocessing and retargeting stages default to one worker to bound
 peak memory. Increase `--object-workers` or `--workers` explicitly when the
 machine has enough memory. HiPHI batch results are saved under
-`output/batch_retarget_hiphi/<robot-name>/`.
+`output/batch_retarget_hiphi/igris_c_dummy_hand/`.
 
 Add `--motion-folder sample_data/bones-seed/motions_proportional/bvh` for the
 actor-proportional subset. BONES-SEED associates each `Axxx` motion with its

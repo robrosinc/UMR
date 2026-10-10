@@ -1219,6 +1219,8 @@ def load_object_contact_source(args, frame_ids, source_slots, smpl_scale, ground
     if not needs_object_contact and not needs_robot_object:
         return None
     hsi = section(args.config_data, "hsi_hoi")
+    object_cfg = section(hsi, "object")
+    prefer_obj_for_contact = bool_config(object_cfg.get("prefer_obj_for_contact"), False) and not needs_robot_object
     configured_objects = hsi.get("source_objects", [])
     candidates = []
     if configured_objects:
@@ -1242,7 +1244,14 @@ def load_object_contact_source(args, frame_ids, source_slots, smpl_scale, ground
                 raise FileNotFoundError(
                     f"Preprocessed object XML is required by robot-object penetration constraints: {xml_path}"
                 )
-            object_path = xml_path if xml_path is not None and xml_path.is_file() else obj_path
+            if prefer_obj_for_contact and (obj_path is None or not obj_path.is_file()):
+                raise FileNotFoundError(
+                    f"Raw OBJ is required for object contact fitting: {obj_path}"
+                )
+            object_path = (
+                obj_path if prefer_obj_for_contact
+                else xml_path if xml_path is not None and xml_path.is_file() else obj_path
+            )
             if object_path is None or not object_path.is_file():
                 raise FileNotFoundError(
                     f"Configured object mesh is missing for {item.get('name', '<unnamed>')}: "
@@ -1263,7 +1272,11 @@ def load_object_contact_source(args, frame_ids, source_slots, smpl_scale, ground
             return None
         stems = sorted({path.stem for path in source_dir.glob("*.xml")} | {path.stem for path in source_dir.glob("*.obj")})
         for stem in stems:
-            source = source_dir / f"{stem}.xml" if (source_dir / f"{stem}.xml").exists() else source_dir / f"{stem}.obj"
+            obj_source = source_dir / f"{stem}.obj"
+            xml_source = source_dir / f"{stem}.xml"
+            if prefer_obj_for_contact and not obj_source.is_file():
+                continue
+            source = obj_source if prefer_obj_for_contact or not xml_source.exists() else xml_source
             try:
                 prop = resolve_prop_trajectory(source)
             except FileNotFoundError:
@@ -1279,7 +1292,6 @@ def load_object_contact_source(args, frame_ids, source_slots, smpl_scale, ground
         print(f"[HumanoidRetarget][ObjectContactMap][WARN] multiple objects found; using first: {candidates[0][0]}")
     object_name, object_path, prop_path = candidates[0]
 
-    object_cfg = section(hsi, "object")
     output_up = str(object_cfg.get("output_up", hsi.get("output_up", "z")))
     convert_y_up = bool_config(object_cfg.get("convert_y_up"), True)
     ground_align = bool_config(object_cfg.get("ground_align"), False)
