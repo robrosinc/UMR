@@ -43,6 +43,15 @@ process and may use the selected GPU for body-shape fitting. If GPU memory or
 RAM becomes tight, reduce the worker count. During parallel fitting the script
 limits each fitter's OpenMP and BLAS threads to one to avoid CPU oversubscription.
 
+Use `--skip-errors` to continue after a single clip fails. Each failed clip gets
+a diagnostic log under `sample_data/hiphi/conversion_errors/<frame>/<lu>/<motion_id>.log`.
+The final summary reports `failed=N` and returns a nonzero exit code if any
+clips failed. Successful clips remain ready; rerunning the same command retries
+only incomplete clips and removes a failure log after a successful retry.
+Use `--exclude-seq-key Cause_to_move_in_place-twirl_0001` to omit a known bad
+motion entirely on later runs. Add another `--exclude-seq-key` for its mirror if
+needed.
+
 The shell launcher also defaults to 1 beta iteration and 1 IK iteration per
 frame. To try these settings on one unconverted motion, use:
 
@@ -124,7 +133,6 @@ Place an appropriate licensed SMPL-X body model under `smpl/`, then run:
 
 ```bash
 python scripts/humanoid_retarget_pipeline_hiphi.py \
-  --config robot_configs/humanoid_retarget_igris_c_example.json \
   --data sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004
 ```
 
@@ -154,52 +162,60 @@ sample_data/hiphi/object_meshes/object_collision/<mesh_id>/
 ```
 
 The original OBJ remains the visual geometry. The generated convex pieces are
-used for MuJoCo collision constraints and are reused on later runs. Surface
-contact fitting can instead sample the raw OBJ directly, without CoACD.
+used for MuJoCo collision constraints and are reused on later runs. In
+`--contact-only` mode, UMR samples contact points directly from the original
+OBJ surface instead; the object is not replaced by a convex hull. That mode
+does not prevent the robot from penetrating the object.
 
 ## Batch retargeting
 
-While BVH-to-SMPL-X conversion is still running, retarget only clips with a
-completed `motion_actor_smplx.npz`:
+The batch runner automatically skips clips without a completed
+`motion_actor_smplx.npz`. The shell launcher defaults to `--stride 3`, which
+retargets every third frame (about 30 Hz for 90 Hz HiPHI clips) and saves the
+reduced FPS. Pass `--stride 1` to retain every frame. While conversion is still
+running, run:
 
 ```bash
-bash scripts/humanoid_retarget_pipeline_hiphi_ready.sh \
-  --config robot_configs/humanoid_retarget_igris_c_example.json
+bash scripts/humanoid_retarget_pipeline_hiphi_batch.sh
 ```
+
+Set `INPUT_DIR`, `OUTPUT_DIR`, and `CONTACT_ONLY` at the top of the shell script,
+or override paths with `--data-root` and `--output-root`. Results are placed in an
+`igris_c_dummy_hand/` subdirectory. Contact-only uses an `_contact_only`
+output root unless `--output-root` is supplied.
 
 To start retargeting immediately from completed SMPL-X clips and raw object
 meshes, use the contact-only mode:
 
 ```bash
-bash scripts/humanoid_retarget_pipeline_hiphi_ready.sh --contact-only
+bash scripts/humanoid_retarget_pipeline_hiphi_batch.sh --contact-only
 ```
 
 This mode keeps the object surface contact cost, skips CoACD, and disables the
 robot-object penetration constraints. Robot motion can therefore intersect an
-object. By default it writes to `output/batch_retarget_hiphi_contact_only/igris_c/`
+object. By default it writes to `output/batch_retarget_hiphi_contact_only/igris_c_dummy_hand/`
 so results are not mixed with standard collision-constrained runs. Existing
-processes keep their original mode; restart the ready runner to use this option.
+processes keep their original mode; restart the batch runner to use this option.
 The first run may still train the shared SMPL-X-to-robot correspondence before
 the first motion starts; subsequent runs reuse it.
 
-The ready runner takes a snapshot of converted clips, skips packages still
+The batch runner takes a snapshot of converted clips, skips packages still
 being fitted, and reuses compatible retarget results on later runs. It exits
 after processing that snapshot; run it again to include newly converted clips.
-Pass `--workers N` and `--retarget-gpus 0` to use parallel retarget jobs and
-the first GPU when resources are available. Object preprocessing and retargeting
-both default to one worker, and retargeting defaults to CPU.
+Pass `--workers N` to run parallel retarget jobs. The shell launcher uses GPU 0
+by default; pass `--retarget-gpus none` for CPU or another GPU ID to override it.
+Object preprocessing and retargeting both default to one worker.
 
-After arranging the complete converted dataset under `sample_data/hiphi/`, run:
-
-```bash
-python scripts/humanoid_retarget_pipeline_hiphi_batch.py \
-  --config robot_configs/humanoid_retarget_igris_c_example.json
-```
+The default target is `robot_configs/humanoid_retarget_igris_c_hiphi.json`,
+which uses the Igris C dummy-hand XML and a separate shared correspondence.
+The dummy spheres follow wrist yaw; they simplify the target robot hand, not
+the original HiPHI actor or object mesh. HiPHI BVH conversion uses the SMPL-X
+body model to fit motion and copies the original object OBJ without fitting it.
 
 The batch adapter discovers sequence directories from `metadata.json`, prepares
 each unique missing object once, prepares or reuses the shared beta-zero
 correspondence, and retargets the motions. Results are written under
-`output/batch_retarget_hiphi/<robot-name>/`.
+`output/batch_retarget_hiphi/igris_c_dummy_hand/`.
 
 Object preprocessing and retargeting default to one worker to limit peak
 memory. Use `--object-workers N` and `--workers N` only when the machine has

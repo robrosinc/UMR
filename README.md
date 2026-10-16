@@ -78,11 +78,8 @@ information can be integrated through the same formulation.
 | AdaPT body+racket | [AdaPT](https://humanoidtennis.github.io/AdaPT/) | [`sample_data/adapt/README.md`](sample_data/adapt/README.md) |
 | NR FBX/BVH | FBX/BVH motion | [`sample_data/nr/README.md`](sample_data/nr/README.md) |
 
-<<<<<<< HEAD
 > **OmniContact support.** The public data provides BVH motion, while UMR expects SMPL-X. `scripts/convert_omnicontact_to_umr.py` maps the released BVH skeleton into UMR's flat SMPL-X layout and prepares the object assets. This direct mapping does not reproduce the fitted example's additional upper-body IK; see the [adapter guide](sample_data/omnicontact/README.md).
 
-=======
->>>>>>> main
 For LAFAN1, use [`lafan_to_smplx`](https://github.com/jaraujo98/lafan_to_smplx)
 to convert BVH motion to SMPL-X before retargeting. Each adapter guide documents
 the expected local layout.
@@ -210,6 +207,10 @@ python scripts/visualize_robot_retarget_result.py \
 Open the clickable `Network` URL printed in the terminal.
 
 Use **Refresh** to load new results while batch retargeting is running.
+In both the standard and LAN Viser folder viewers, **Previous page** /
+**Next page** browse results in groups of 100. The clip navigation buttons
+still move through the full result list. Each browser session keeps its own
+directory and result page.
 
 ### LAN result viewer
 
