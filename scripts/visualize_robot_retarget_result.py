@@ -60,6 +60,7 @@ LAN_RESULT_DIRS = {
     "OMOMO": ROOT / "light_form/igris_c_omomo",
     "AMASS": ROOT / "light_form/igris_c_amass",
     "HiPHI": ROOT / "light_form/igris_c_hiphi",
+    "PICO": ROOT / "light_form/igris_c_pico",
     # "GRAIL": ROOT / "output/igris_c_grail",
     # "OmniContact": ROOT / "output/igris_c_omnicontact",
 }

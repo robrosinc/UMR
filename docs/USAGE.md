@@ -114,6 +114,18 @@ feet are not directly snapped to the ground.
 ### OMOMO
 `bash scripts/convert_omomo_umr_to_light.sh` (UMR → light form)
 
+### PICO teleoperation (GMR PKL)
+`bash scripts/convert_pico_pkl_to_light.sh` (GMR PICO PKL → light form)
+
+The script reads `GMR/pico/retargeted/` and the matching GMR IGRIS-C v2
+XML by default. Set `INPUT_DIR`, `OUTPUT_DIR`, and `ROBOT_XML` in the shell
+script or environment to use other paths. It packages the robot and its static
+floor and accepts both live `record_meta` and offline `retarget_meta` PKLs;
+the retargeted PKLs do not contain moving object or raw device tracks.
+Clip IDs include the take name (for example, `take_1__pico_0000`) so the
+common canonical expander can write unique flat `motion/*.pkl` filenames.
+The LAN viewer lists the generated `light_form/igris_c_pico` folder.
+
 All sources: `bash scripts/expand_light_to_canonical.sh` (light form → canonical;
 기존 직접 변환 스크립트는 deprecated)
 

@@ -71,5 +71,5 @@ units, object tracks, and terrain to this light contract before expansion.
 
 Other scene primitives or geometry encodings require an explicit light schema
 extension and corresponding expander support. The current implementation is
-verified against OMOMO, HiPHI, and object-free AMASS, Bones Seed, and LAFAN1
-light form.
+verified against OMOMO, HiPHI, and object-free AMASS, Bones Seed, LAFAN1, and
+PICO light form.
