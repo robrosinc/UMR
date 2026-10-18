@@ -55,12 +55,13 @@ ALL_RETARGET_RESULTS = (
     ("pipluspro", ROOT / "output/pipluspro_retarget/smpl_motion_pipluspro.npz"),
 )
 LAN_RESULT_DIRS = {
-    "Bones Seed": ROOT / "output/igris_c_bones_seed",
-    "LAFAN1": ROOT / "output/igris_c_lafan1",
-    "OMOMO Dummy": ROOT / "output/igris_c_omomo_dummy",
-    "AMASS": ROOT / "output/igris_c_amass",
-    "GRAIL": ROOT / "output/igris_c_grail",
-    "OmniContact": ROOT / "output/igris_c_omnicontact",
+    "Bones Seed": ROOT / "light_form/igris_c_bones_seed",
+    "LAFAN1": ROOT / "light_form/igris_c_lafan1",
+    "OMOMO": ROOT / "light_form/igris_c_omomo",
+    "AMASS": ROOT / "light_form/igris_c_amass",
+    "HiPHI": ROOT / "light_form/igris_c_hiphi",
+    # "GRAIL": ROOT / "output/igris_c_grail",
+    # "OmniContact": ROOT / "output/igris_c_omnicontact",
 }
 
 
@@ -86,7 +87,7 @@ def parse_args():
         "--result-format",
         choices=("umr", "canonical"),
         default="umr",
-        help="Input format for the Viser folder browser (default: umr).",
+        help="Input format for the Viser folder browser (default: umr). Light-form NPZ is detected automatically.",
     )
     parser.add_argument(
         "--result-dir",
@@ -443,6 +444,24 @@ def resolve_robot_xml_path(path: Path, result_path: Path | None = None) -> Path:
         if source_xml is not None and source_xml.exists():
             return source_xml
     return candidates[-1]
+
+
+def resolve_light_reference(result_path: Path, reference: str) -> Path:
+    """Resolve a light-form reference relative to its clip, inside its dataset."""
+    clip_path = Path(result_path).resolve()
+    clips_dir = next((parent for parent in clip_path.parents if parent.name == "clips"), None)
+    if clips_dir is None:
+        raise ValueError(f"Light-form clip must be below a clips/ directory: {clip_path}")
+    dataset_root = clips_dir.parent
+    relative = Path(reference)
+    if relative.is_absolute():
+        raise ValueError(f"Light-form reference must be relative: {reference}")
+    target = (clip_path.parent / relative).resolve()
+    if not target.is_relative_to(dataset_root):
+        raise ValueError(f"Light-form reference escapes dataset root: {reference}")
+    if not target.is_file():
+        raise FileNotFoundError(target)
+    return target
 
 
 def absolute_elements_path_to_target(path_text: str) -> Path:
@@ -982,22 +1001,58 @@ def select_object_render_path(xml_path: Path, obj_path: Path, mode: str) -> tupl
     return None, "missing"
 
 
-def prepare_source_objects(args, result, playback_frame_ids: np.ndarray, temp_dir: str):
+def prepare_source_objects(args, result, playback_frame_ids: np.ndarray, temp_dir: str,
+                           result_path: Path | None = None):
     show_source = bool(args.show_source_objects)
     show_robot = bool(args.show_robot_objects)
     if not show_source and not show_robot:
         return []
     source_format = scalar_string(result["source_format"]) if "source_format" in result else ""
-    source_dir = resolve_source_data_dir(result)
-    if source_dir is None:
-        return []
-    if source_format == "hiphi_smplx":
+    is_light = "light_form_version" in result
+    if is_light:
+        if result_path is None:
+            raise ValueError("Light-form object references require the clip path")
+        object_keys = (
+            "light_object_names", "light_object_xml_refs", "light_object_scales",
+            "light_object_pos", "light_object_rot",
+        )
+        present = [key in result for key in object_keys]
+        if not any(present):
+            return []
+        if not all(present):
+            raise ValueError(f"Incomplete light-form object arrays: {result_path}")
+        names = np.asarray(result["light_object_names"], dtype=str)
+        xml_refs = np.asarray(result["light_object_xml_refs"], dtype=str)
+        light_scales = np.asarray(result["light_object_scales"], dtype=np.float32)
+        light_pos = np.asarray(result["light_object_pos"], dtype=np.float32)
+        light_rot = np.asarray(result["light_object_rot"], dtype=np.float32)
+        total_frames = len(result["qpos"])
+        count = len(names)
+        if (xml_refs.shape != (count,) or light_scales.shape != (count,)
+                or light_pos.shape != (total_frames, count, 3)
+                or light_rot.shape != (total_frames, count, 4)):
+            raise ValueError(f"Invalid light-form object arrays: {result_path}")
+        object_entries = [
+            {
+                "name": str(name),
+                "xml": str(resolve_light_reference(result_path, str(xml_refs[i]))),
+                "obj": str(Path(temp_dir) / "unused.obj"),
+                "prop": str(result_path),
+            }
+            for i, name in enumerate(names)
+        ]
+        source_dir = Path(result_path).parent
+    else:
+        source_dir = resolve_source_data_dir(result)
+        if source_dir is None:
+            return []
+    if not is_light and source_format == "hiphi_smplx":
         try:
             object_entries = resolve_hiphi_objects(source_dir)
         except (FileNotFoundError, ValueError) as exc:
             print(f"[{VIS_PREFIX}][Objects][WARN] could not resolve HiPHI metadata objects: {exc}")
             object_entries = []
-    else:
+    elif not is_light:
         stems = sorted({path.stem for path in source_dir.glob("*.obj")} | {path.stem for path in source_dir.glob("*.xml")})
         object_entries = [
             {
@@ -1017,9 +1072,10 @@ def prepare_source_objects(args, result, playback_frame_ids: np.ndarray, temp_di
     floor_y = float(np.asarray(result["noitom_floor_y"]).reshape(-1)[0]) if "noitom_floor_y" in result else 0.0
     ground_offset = float(np.asarray(result["noitom_ground_offset"]).reshape(-1)[0]) if "noitom_ground_offset" in result else 0.0
     smpl_scale = float(np.asarray(result["smpl_scale"]).reshape(-1)[0]) if "smpl_scale" in result else 1.0
-    object_in_retarget_frame = bool(
-        np.asarray(result["viewer_object_motion_in_retarget_frame"]).reshape(-1)[0]
-    ) if "viewer_object_motion_in_retarget_frame" in result else False
+    object_in_retarget_frame = is_light or (
+        bool(np.asarray(result["viewer_object_motion_in_retarget_frame"]).reshape(-1)[0])
+        if "viewer_object_motion_in_retarget_frame" in result else False
+    )
     if object_in_retarget_frame:
         # Adapter-provided meshes and trajectories already include coordinate
         # conversion, ground alignment, and object scale. Keep them byte-for-
@@ -1063,33 +1119,34 @@ def prepare_source_objects(args, result, playback_frame_ids: np.ndarray, temp_di
                 f"{getattr(args, 'object_render_source', 'auto')} requested {render_source}"
             )
             continue
-        if not prop_path.exists():
+        if not is_light and not prop_path.exists():
             print(f"[{VIS_PREFIX}][Objects][WARN] skip {stem}: trajectory missing: {prop_path}")
             continue
-        source_motion = load_noitom_prop_motion(
-            prop_path,
-            source_frame_ids,
-            result,
-            object_output_up,
-            object_convert_y_up,
-            object_ground_align,
-            object_floor_y,
-            object_ground_offset,
-            object_scale,
-            source_offset,
-        )
-        robot_motion = load_noitom_prop_motion(
-            prop_path,
-            source_frame_ids,
-            result,
-            object_output_up,
-            object_convert_y_up,
-            object_ground_align,
-            object_floor_y,
-            object_ground_offset,
-            object_scale,
-            robot_offset,
-        )
+        if is_light:
+            selected_pos = light_pos[playback_frame_ids, object_id]
+            selected_rot = light_rot[playback_frame_ids, object_id]
+            source_motion = {
+                "path": result_path, "num_rows": total_frames,
+                "positions": selected_pos + source_offset[None, :],
+                "quats_wxyz": selected_rot,
+            }
+            robot_motion = {
+                "path": result_path, "num_rows": total_frames,
+                "positions": selected_pos + robot_offset[None, :],
+                "quats_wxyz": selected_rot,
+            }
+            object_scale = float(light_scales[object_id])
+        else:
+            source_motion = load_noitom_prop_motion(
+                prop_path, source_frame_ids, result, object_output_up,
+                object_convert_y_up, object_ground_align, object_floor_y,
+                object_ground_offset, object_scale, source_offset,
+            )
+            robot_motion = load_noitom_prop_motion(
+                prop_path, source_frame_ids, result, object_output_up,
+                object_convert_y_up, object_ground_align, object_floor_y,
+                object_ground_offset, object_scale, robot_offset,
+            )
         if source_motion is None or robot_motion is None:
             continue
         base = {
@@ -1270,6 +1327,12 @@ def load_result(path: Path):
     robot_xml = infer_default_robot_xml(path)
     if "robot_xml" in result:
         robot_xml = Path(scalar_string(result["robot_xml"]))
+        if "light_form_version" in result:
+            version = int(np.asarray(result["light_form_version"]).reshape(-1)[0])
+            if version != 1:
+                raise ValueError(f"Unsupported light-form version {version}: {path}")
+            robot_xml = resolve_light_reference(path, str(robot_xml))
+            resolve_light_reference(path, scalar_string(result["light_scene_ref"]))
     fps = float(np.asarray(result["fps"]).reshape(-1)[0]) if "fps" in result else 30.0
     return result, qpos, robot_xml, fps
 
@@ -3407,7 +3470,7 @@ def prepare_viser_result_clip(args, result_path: Path) -> dict:
             )
 
         object_tmp = tempfile.TemporaryDirectory()
-        source_objects = prepare_source_objects(args, result, frame_ids, object_tmp.name)
+        source_objects = prepare_source_objects(args, result, frame_ids, object_tmp.name, result_path)
         load_robot_xml, patched_robot_xml_tmp = patch_legacy_xml_paths(
             robot_xml,
             source_objects,
@@ -3567,7 +3630,7 @@ def main():
         raise ValueError("--viewer-max-clients must be at least 1.")
     if args.lan_viewer:
         if args.result_dir is not None or args.result_format != "umr":
-            raise ValueError("--lan-viewer uses its own UMR result folders; omit --result-dir and --result-format.")
+            raise ValueError("--lan-viewer uses its configured result folders; omit --result-dir and --result-format.")
         args.result_dir = next(iter(LAN_RESULT_DIRS.values()))
         args.viewer_backend = "viser"
     if args.result_format == "canonical" and args.result_dir is None:
@@ -3627,7 +3690,7 @@ def main():
         raise ValueError(f"No frames selected: total={len(qpos_all)}, start={start}, end={end}")
 
     object_tmp = tempfile.TemporaryDirectory()
-    source_objects = prepare_source_objects(args, result, frame_ids, object_tmp.name)
+    source_objects = prepare_source_objects(args, result, frame_ids, object_tmp.name, args.result)
     load_robot_xml, patched_robot_xml_tmp = patch_legacy_xml_paths(
         robot_xml,
         source_objects,

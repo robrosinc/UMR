@@ -25,5 +25,7 @@ py-soma-x
 tqdm>=4.66
 embreex>=0.1.6
 trimesh>=4.0
+usd-core==26.8
 viser>=1.0,<2.0
 warp-lang>=1.6
+pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128

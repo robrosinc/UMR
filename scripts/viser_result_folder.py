@@ -6,6 +6,10 @@ import contextlib
 import html
 import io
 import json
+import re
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -38,6 +42,60 @@ EMPTY_OPTION = "No results found"
 SELECT_OPTION = "Select a clip"
 CLIP_JUMP_MULTIPLIERS = (1, 10, 100, 1000)
 RESULT_PAGE_SIZE = 100
+
+
+def light_form_root_for_clip(clip: Path) -> Path | None:
+    """Return the package root only for a valid light-form NPZ under clips/."""
+    clip = Path(clip).expanduser().resolve()
+    clips_dir = next((parent for parent in clip.parents if parent.name == "clips"), None)
+    if clips_dir is None or not clip.is_file():
+        return None
+    root = clips_dir.parent
+    try:
+        manifest = json.loads((root / "format.json").read_text())
+        if manifest.get("format") != "umr_light" or manifest.get("version") != 1:
+            return None
+        with np.load(clip, allow_pickle=False) as data:
+            if "light_form_version" not in data:
+                return None
+            if int(np.asarray(data["light_form_version"]).item()) != 1:
+                return None
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+        return None
+    return root
+
+
+def build_canonical_clip_download(clip: Path) -> tuple[str, bytes]:
+    """Expand exactly one light clip and return a self-contained canonical ZIP."""
+    clip = Path(clip).expanduser().resolve()
+    root = light_form_root_for_clip(clip)
+    if root is None:
+        raise ValueError(f"Canonical download requires a light-form clip: {clip}")
+    relative = clip.relative_to(root / "clips")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{root.name}_{relative.with_suffix('').as_posix()}")[:180]
+    archive_root = f"canonical_{safe_name}"
+    filename = f"{archive_root}.zip"
+    expander = Path(__file__).with_name("expand_light_to_canonical.py")
+    with tempfile.TemporaryDirectory(prefix="umr-canonical-download-") as temporary:
+        work = Path(temporary)
+        output = work / "canonical"
+        process = subprocess.run(
+            [sys.executable, str(expander), "--input-dir", str(root),
+             "--output-dir", str(output), "--clip-path", relative.as_posix()],
+            capture_output=True, text=True, timeout=600, check=False,
+        )
+        if process.returncode != 0:
+            detail = (process.stderr or process.stdout).strip().splitlines()
+            raise RuntimeError(detail[-1] if detail else f"Expand failed with exit code {process.returncode}")
+        expected = output / "motion" / f"{clip.stem}.pkl"
+        if not expected.is_file() or len(list((output / "motion").glob("*.pkl"))) != 1:
+            raise RuntimeError("Expand did not produce exactly the selected motion clip")
+        archive_path = work / filename
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=3) as archive:
+            for path in sorted(output.rglob("*")):
+                if path.is_file():
+                    archive.write(path, f"{archive_root}/{path.relative_to(output).as_posix()}")
+        return filename, archive_path.read_bytes()
 
 
 def scan_result_files(result_dir: Path) -> list[Path]:
@@ -279,6 +337,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             "slider_write": False,
             "selector_write": False,
             "loading": False,
+            "downloading": False,
             "generation": 0,
             "recording": False,
             "record_stopping": False,
@@ -308,6 +367,10 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             next_clip_button = client.gui.add_button("Next 1 clip (→)", disabled=True)
             jump_down_button = client.gui.add_button("Jump ÷10 (PgDn)", disabled=True)
             jump_up_button = client.gui.add_button("Jump ×10 (PgUp)")
+            download_button = (
+                client.gui.add_button("Download selected canonical ZIP", disabled=True, visible=False)
+                if bool(getattr(args, "lan_viewer", False)) else None
+            )
         _install_result_dropdown_scrollbar(client, str(result_dropdown._impl.uuid))
 
         client.gui.add_markdown("**Playback**")
@@ -362,6 +425,12 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
             enabled = bool(enabled) and not bool(state["loading"])
             for control in clip_controls:
                 control.disabled = not enabled
+            if download_button is not None:
+                active = state.get("active")
+                path = None if active is None else active["descriptor"]["path"]
+                eligible = path is not None and light_form_root_for_clip(path) is not None
+                download_button.visible = eligible
+                download_button.disabled = not enabled or not eligible or bool(state["downloading"])
 
         def update_result_page(focus_path: Path | None = None) -> None:
             """Send only one page of result names to the browser."""
@@ -832,6 +901,36 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
         @refresh_button.on_click
         def _refresh(event) -> None:
             refresh_results(event.client)
+
+        if download_button is not None:
+            @download_button.on_click
+            def _download_canonical(event) -> None:
+                recipient = event.client
+                if recipient is None:
+                    return
+                with state_lock:
+                    active = state.get("active")
+                    if active is None or state["loading"] or state["downloading"]:
+                        return
+                    path = Path(active["descriptor"]["path"])
+                    if light_form_root_for_clip(path) is None:
+                        set_clip_controls(True)
+                        notify(recipient, "Download unavailable", "Select a light-form clip.", error=True)
+                        return
+                    state["downloading"] = True
+                    download_button.disabled = True
+                notify(recipient, "Converting clip", f"Expanding {path.name} to canonical form…")
+                try:
+                    filename, content = build_canonical_clip_download(path)
+                    recipient.send_file_download(filename, content, save_immediately=True)
+                    notify(recipient, "Canonical download ready", filename)
+                except Exception as exc:
+                    print(f"[{VIS_PREFIX}][Viser][WARN] canonical download failed for {path}: {exc}", flush=True)
+                    notify(recipient, "Canonical download failed", str(exc), error=True)
+                finally:
+                    with state_lock:
+                        state["downloading"] = False
+                        set_clip_controls(state.get("active") is not None)
 
         @previous_page_button.on_click
         def _previous_page(_event) -> None:
