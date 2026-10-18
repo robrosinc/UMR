@@ -1,6 +1,11 @@
-# IGRIS-C v2 motion canonical form (GMR PKL)
+# IGRIS-C motion canonical form (GMR PKL)
 
-파일은 Python `pickle`로 직렬화한 `dict`이며, NumPy 배열을 포함한다. 로봇 모델은 [`assets/robros_igris_c_v2/igris_c_v2.xml`](assets/robros_igris_c_v2/igris_c_v2.xml), 로봇 식별자는 `robros_igris_c_v2`이다.
+모션 파일은 Python `pickle`로 직렬화한 `dict`이며, NumPy 배열을 포함한다.
+현재 light form 확장기는 패키지에 포함된 IGRIS-C XML(기본형 또는
+dummy-hand형)을 컴파일해 `robot/igris_c_<hash>.mjb`로 저장한다. 모션의
+`retarget_meta.robot_model`이 해당 MJB의 상대 경로를 지정한다. 저장소의
+원본 XML은 [`assets/igris_c/igris_c.xml`](../assets/igris_c/igris_c.xml)과
+[`assets/igris_c/igris_c_dummy_hand.xml`](../assets/igris_c/igris_c_dummy_hand.xml)에 있다.
 
 ## 공통 규칙
 
@@ -80,9 +85,14 @@ keybody_pos[t, i]       = keybody_pos_world[t, i]
 
 `root_vel`과 `dof_vel`은 첫/마지막 프레임에서 1차 차분, 내부에서 중심 차분을 쓴다: `v[0]=(x[1]-x[0])/dt`, `v[t]=(x[t+1]-x[t-1])/(2dt)`, `v[T-1]=(x[T-1]-x[T-2])/dt`. `root_angvel[t]`은 내부에서 `log(R(q[t-1])^-1 R(q[t+1]))/(2dt)`, 양 끝에서 각각 `log(R(q[0])^-1 R(q[1]))/dt`와 `log(R(q[T-2])^-1 R(q[T-1]))/dt`이다 (`log`는 SciPy `Rotation.as_rotvec`). 상대 회전의 기준은 첫 번째 쿼터니언이므로 이 배열을 월드 축 각속도로 취급하지 않는다. `T=1`이면 속도는 0이다.
 
-다른 형식에서 변환할 때는 관절 이름을 위 31열로 **이름 기반 재배열**한 뒤, 위치·방향·관절각으로 `qpos`를 만들고 `fps`에 맞춰 속도를 계산한다. 키바디가 필요하면 해당 XML에 `qpos`를 넣고 `mj_forward` 후 `data.xpos`/`data.xquat`를 위 33개 body 이름 순으로 추출한다. 공통 생성 로직: [`motion_utils.py`](general_motion_retargeting/utils/motion_utils.py).
+다른 형식에서 변환할 때는 관절 이름을 위 31열로 **이름 기반 재배열**한 뒤, 위치·방향·관절각으로 `qpos`를 만들고 `fps`에 맞춰 속도를 계산한다. 키바디가 필요하면 해당 XML에 `qpos`를 넣고 `mj_forward` 후 `data.xpos`/`data.xquat`를 위 33개 body 이름 순으로 추출한다. 현재 공통 생성 로직은 [`expand_light_to_canonical.py`](../scripts/expand_light_to_canonical.py)에 있다.
 
 ## Object 및 terrain 표준 형식
+
+현재 권장 변환 경로는 소스별 UMR→light packaging 후 공통
+`scripts/expand_light_to_canonical.py` 실행이다. 배포 및 단독 실행 방법은
+[Light form → canonical](LIGHT_TO_CANONICAL.md)에 있다. 기존 소스별 UMR→canonical
+직접 변환 스크립트는 deprecated이며 과거 결과 재현용으로 남겨 둔다.
 
 학습 데이터에서 object와 terrain은 동일한 **scene entity track** 형식을 쓴다. 각 entity는 고정된 로컬 좌표계의 USD 형상과 시간에 따른 월드 pose를 가진다. Object는 이동·회전할 수 있고, terrain은 보통 고정되어 있지만 움직이는 플랫폼도 같은 형식으로 표현한다. 이 pose track은 강체 이동만 나타내므로 프레임마다 형상이 변하는 변형체는 별도 geometry animation 규격이 필요하다.
 
@@ -105,7 +115,7 @@ dataset_root/
   scene_tracks/
     <clip_id>.pkl                 # that clip's object and terrain tracks
   robot/
-    igris_c.mjb                   # self-contained MuJoCo robot model for playback
+    igris_c_<hash>.mjb            # self-contained MuJoCo robot model for playback
   usd_assets/
     objects/
       <asset_id>.usd, .usda, .usdc, or .usdz
@@ -113,7 +123,7 @@ dataset_root/
       <asset_id>.usd, .usda, .usdc, or .usdz
 ```
 
-`motion/<clip_id>.pkl`과 `scene_tracks/<clip_id>.pkl`의 `<clip_id>`는 같아야 한다. scene track PKL의 `usd_asset`은 `dataset_root` 기준 상대 경로로 기록하며, USD 파일은 `usd_assets/objects/` 또는 `usd_assets/terrain/`에 저장한다. Viser 재생용 `robot/igris_c.mjb`는 로봇 mesh를 포함하므로 canonical 디렉터리 외부의 XML/mesh를 참조하지 않는다. 새 변환 결과의 `retarget_meta.robot_model`에는 이 상대 경로를 기록한다. scene track 파일이 없으면 해당 clip에 object/terrain track이 없는 것으로 해석한다. scene track PKL의 최상위 키와 값은 다음과 같다.
+`motion/<clip_id>.pkl`과 `scene_tracks/<clip_id>.pkl`의 `<clip_id>`는 같아야 한다. scene track PKL의 `usd_asset`은 `dataset_root` 기준 상대 경로로 기록하며, USD 파일은 `usd_assets/objects/` 또는 `usd_assets/terrain/`에 저장한다. Viser 재생용 `robot/*.mjb`는 로봇 mesh를 포함하므로 canonical 디렉터리 외부의 XML/mesh를 참조하지 않는다. 새 변환 결과의 `retarget_meta.robot_model`에는 해당 파일의 상대 경로를 기록한다. scene track 파일이 없으면 해당 clip에 object/terrain track이 없는 것으로 해석한다. scene track PKL의 최상위 키와 값은 다음과 같다.
 
 | key | 타입 | 의미 |
 | --- | --- | --- |
@@ -140,7 +150,8 @@ Record 리스트 순서는 clip 내내 고정한다. Record 형식은 object와 
 - USD는 형상과 형상에 속하는 정적 정보를 담는다. Mesh topology, vertex, material, 로컬 transform 및 필요하면 collision용 geometry를 USD asset에 둔다. 프레임별 이동/회전은 pickle의 pose track에 둔다.
 - GRAIL 변환기는 원본 USD Mesh를 visual로 유지하고, retargeting에 쓰인 `object_mjcf`의 CoACD 분할 OBJ를 별도의 숨겨진 `/Object/Collision/Part_*` 또는 `/Terrain/Collision/Part_*` Mesh로 저장한다. 각 충돌 part에는 `PhysicsCollisionAPI`, `PhysicsMeshCollisionAPI`, `physics:approximation=convexHull`을 기록한다. Viser는 충돌 전용 Mesh를 그리지 않는다.
 - OMOMO 변환기는 XML의 visual `group=2` Mesh와 미리 생성된 CoACD `group=3` OBJ를 분리해 저장한다. Visual Mesh에는 충돌 API를 붙이지 않고, 각 CoACD OBJ를 숨겨진 `/Object/Collision/Part_*` Mesh로 저장해 `PhysicsCollisionAPI`, `PhysicsMeshCollisionAPI`, `physics:approximation=convexHull`을 기록한다. USD 변환 중 CoACD를 다시 실행하지 않는다. MuJoCo 평면에서 생성한 terrain은 visual과 충돌에 같은 두 삼각형 Mesh를 사용하며 `physics:approximation=none`이다. Canonical USD에는 `RigidBodyAPI`를 기록하지 않는다.
-- OMOMO `objects_manifest.json`은 object ID별 `usd_path`, `usd_prim_path`, `clips`를 기록한다. 각 clip은 `motion_path`, `scene_track_path`, `entity_id`를 가지며, 프레임별 object pose는 scene track에만 저장한다. 최상위 `motions`는 canonical motion PKL 상대 경로 목록이다.
+- Light-form 확장기는 공유 `usd_assets/objects/base/*.usd`에 visual 및 collision Mesh를 저장하고, `usd_assets/objects/instances/*.usd`의 상대 USD reference와 정적 scale transform으로 클립별 최종 배율을 적용한다. Scene track은 instance USD를 가리킨다. 해당 reference는 canonical 디렉터리 내부에서만 해석된다.
+- 공통 확장기의 `objects_manifest.json`은 object ID별 `usd_path`, `usd_prim_path`, `clips`를 기록한다. 각 clip은 `motion_path`, `scene_track_path`, `entity_id`를 가지며, 프레임별 object pose는 scene track에만 저장한다. 최상위 `motions`는 canonical motion PKL 상대 경로 목록이다.
 - ROBROS_LAB의 일반 motion loader는 이 manifest의 `motions` 목록을 읽을 수 있다. `objects`와 `scene_track_path`를 사용해 USD를 배치하고 프레임별 pose를 적용하는 소비자 코드는 별도로 필요하다.
 - `usd_prim_path`는 asset 내부의 안정된 root prim이어야 한다. pose를 적용할 때 해당 prim의 USD 내부 transform을 보존하면서 entity pose를 바깥 월드 transform으로 적용한다. 프레임별 pose를 USD animation과 pickle 양쪽에 중복 기록하지 않는다.
 - 여러 mesh/prim으로 구성된 하나의 물체나 terrain은 하나의 USD root prim 아래에 묶고 하나의 pose track으로 표현한다. 별도로 움직이는 구성 요소는 각각 entity record로 나눈다.
@@ -180,9 +191,11 @@ Record 리스트 순서는 clip 내내 고정한다. Record 형식은 object와 
 
 ### Viser 재생
 
-`dataset_root` 안에 `motion/`, `scene_tracks/`, `usd_assets/`, `robot/igris_c.mjb`가 있으면 원본 UMR NPZ나 OMOMO source 디렉터리 없이 canonical clip을 재생할 수 있다. `scene_tracks/<clip_id>.pkl`이 없는 clip은 로봇만 재생한다.
+`dataset_root` 안에 `motion/`, `scene_tracks/`, `usd_assets/`, `robot/*.mjb`가 있으면 원본 UMR NPZ나 OMOMO source 디렉터리 없이 canonical clip을 재생할 수 있다. 각 모션의 `retarget_meta.robot_model`이 사용할 MJB를 지정한다. `scene_tracks/<clip_id>.pkl`이 없는 clip은 로봇만 재생한다.
 
 ```bash
-bash scripts/viewer_canonical.sh
-bash scripts/viewer.sh
+python scripts/visualize_robot_retarget_result.py \
+  --result-format canonical \
+  --result-dir /path/to/canonical_dataset \
+  --viewer-backend viser
 ```

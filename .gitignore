@@ -9,6 +9,8 @@ venv/
 
 # Generated UMR artifacts
 output/
+light_form/
+canonical_form/
 visualizations/
 deploy/
 *.floating_mjcf.xml
@@ -27,6 +29,9 @@ node_modules/
 smpl/*.pkl
 smpl/*.npz
 smpl/*.zip
+external_assets/hiphi/SMPLX_NEUTRAL.npz
+external_assets/hiphi/beta_fit/*.h5
+external_assets/hiphi/beta_fit/*.pkl
 
 # User-downloaded or locally converted third-party datasets/assets
 sample_data/bones-seed/motions_uniform/

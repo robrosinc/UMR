@@ -97,10 +97,30 @@ actual jumps. If fewer than 5% of frames qualify, the clip uses the previous
 single-height correction. The source `.npz` files are not changed, and robot
 feet are not directly snapped to the ground.
 
-## Convert to ROBROSLAB Canonical form
+## Create light form and canonical form
+
+### AMASS
+`bash scripts/convert_amass_umr_to_light.sh` (UMR → light form)
+
+### Bones Seed
+`bash scripts/convert_bones_seed_umr_to_light.sh` (UMR → light form)
+
+### HiPHI
+`bash scripts/convert_hiphi_umr_to_light.sh` (UMR → light form)
+
+### LAFAN1
+`bash scripts/convert_lafan1_umr_to_light.sh` (UMR → light form)
+
 ### OMOMO
-`bash scripts/convert_igris_c_omomo_canonical.sh`
-* differ each robot platform
+`bash scripts/convert_omomo_umr_to_light.sh` (UMR → light form)
+
+All sources: `bash scripts/expand_light_to_canonical.sh` (light form → canonical;
+기존 직접 변환 스크립트는 deprecated)
+
+NAS 배포에는 각 `light_form/<dataset>/` 디렉터리 전체를 사용한다. 사용자는
+UMR 전체를 설치할 필요 없이 공통 expand 스크립트와 최소 의존성만으로
+canonical form을 생성할 수 있다. 명령어와 배포 파일 목록은
+[Light form → canonical](LIGHT_TO_CANONICAL.md)을 참조한다.
 
 
 ## Viewer Setting

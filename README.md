@@ -89,9 +89,12 @@ the expected local layout.
 ```bash
 conda create -n umr python=3.12 pip -y
 conda activate umr
-python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.4.1
 python -m pip install -r requirements-umr.txt
 ```
+
+To expand a downloaded light-form dataset into canonical form, the full UMR
+installation is unnecessary. Use the standalone script and the smaller
+`requirements-light-expand.txt`; see [Light form → canonical](docs/LIGHT_TO_CANONICAL.md).
 
 ### SMPL-X Body Models
 
@@ -215,11 +218,18 @@ directory and result page.
 ### LAN result viewer
 
 The LAN viewer uses the same Viser controls and adds a **Directory**
-selector for Bones Seed, LAFAN1, OMOMO Dummy, AMASS, GRAIL, and OmniContact. The allowed folders are
+selector for the configured UMR output and light form folders. The allowed folders are
 defined relative to this repository in `LAN_RESULT_DIRS` in
 `scripts/visualize_robot_retarget_result.py`. Each browser connection has its
 own directory, clip, playback, camera, and capture controls. Reloading the page
 starts a new session.
+
+For a selected clip in a light form folder, **Download selected canonical ZIP**
+expands that clip when clicked. The ZIP contains one `motion/*.pkl`, its
+`scene_tracks/*.pkl`, the robot model, referenced USD assets, and
+`objects_manifest.json`. The button is hidden for UMR output folders. The
+conversion uses a temporary directory; it does not create a canonical dataset
+on the server.
 
 Run it in a terminal with:
 
@@ -227,13 +237,16 @@ Run it in a terminal with:
 bash scripts/viewer_lan.sh
 ```
 
+The launcher uses the UMR Python environment by default; set `UMR_PYTHON`
+to use another environment with the viewer and light expansion dependencies.
+
 The script binds to this computer's current LAN address and prints the URL
 (`http://LAN-IP:8081`). Open that address from another device on the building
 network. Stop the viewer with Ctrl+C. It does not start at boot or create a
 public internet address. On a host with multiple network interfaces, set the
 binding address explicitly, for example
 `UMR_VIEWER_HOST=10.1.0.25 bash scripts/viewer_lan.sh`.
-By default, up to four active viewer sessions are admitted. To change this,
+By default, up to six active viewer sessions are admitted. To change this,
 run `UMR_VIEWER_MAX_CLIENTS=2 bash scripts/viewer_lan.sh` (or pass
 `--viewer-max-clients 2` to the Python entry point). Extra visitors see a
 "Viewer is full" message until a viewer tab closes; they can then reload.
