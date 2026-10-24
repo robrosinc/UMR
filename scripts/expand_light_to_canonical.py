@@ -214,39 +214,43 @@ def parse_object_meshes(xml_path: Path, light_root: Path, group: str) -> list[tu
     return out
 
 
-def write_base_object(xml_path: Path, light_root: Path, output: Path) -> Path:
+def write_base_object(xml_path: Path, light_root: Path, output: Path,
+                      entity_type: str = "object") -> Path:
+    root_name = "Terrain" if entity_type == "terrain" else "Object"
     digest = hashlib.sha256(
-        xml_path.relative_to(light_root).as_posix().encode() + b"\0" + xml_path.read_bytes()
+        root_name.encode() + b"\0" + xml_path.relative_to(light_root).as_posix().encode() + b"\0" + xml_path.read_bytes()
     ).hexdigest()[:24]
-    path = output / "usd_assets/objects/base" / f"{digest}.usd"
+    path = output / "usd_assets" / ("terrain" if entity_type == "terrain" else "objects") / "base" / f"{digest}.usd"
     if path.is_file():
         return path
     visual = parse_object_meshes(xml_path, light_root, "2")
     collision = parse_object_meshes(xml_path, light_root, "3")
     if not visual or not collision:
         raise ValueError(f"Object must have visual and collision mesh groups: {xml_path}")
-    stage, _ = new_stage(path, "Object")
+    stage, _ = new_stage(path, root_name)
     for index, (vertices, faces) in enumerate(visual):
-        add_mesh(stage, f"/Object/Mesh_{index}", vertices, faces, False)
-    UsdGeom.Scope.Define(stage, "/Object/Collision")
+        add_mesh(stage, f"/{root_name}/Mesh_{index}", vertices, faces, False)
+    UsdGeom.Scope.Define(stage, f"/{root_name}/Collision")
     for index, (vertices, faces) in enumerate(collision):
-        add_mesh(stage, f"/Object/Collision/Part_{index}", vertices, faces, True, True)
+        add_mesh(stage, f"/{root_name}/Collision/Part_{index}", vertices, faces, True, True)
     stage.GetRootLayer().Save()
     return path
 
 
-def write_scaled_object(base: Path, scale: float, output: Path) -> Path:
+def write_scaled_object(base: Path, scale: float, output: Path,
+                        entity_type: str = "object") -> Path:
     if not np.isfinite(scale) or scale <= 0:
         raise ValueError(f"Invalid object scale: {scale}")
     # The stored light scale is float32; its exact bits define asset identity.
     key = hashlib.sha256(base.stem.encode() + np.float32(scale).tobytes()).hexdigest()[:24]
-    path = output / "usd_assets/objects/instances" / f"{key}.usd"
+    root_name = "Terrain" if entity_type == "terrain" else "Object"
+    path = output / "usd_assets" / ("terrain" if entity_type == "terrain" else "objects") / "instances" / f"{key}.usd"
     if path.is_file():
         return path
-    stage, _ = new_stage(path, "Object")
-    child = UsdGeom.Xform.Define(stage, "/Object/Geometry")
+    stage, _ = new_stage(path, root_name)
+    child = UsdGeom.Xform.Define(stage, f"/{root_name}/Geometry")
     child.AddScaleOp().Set((float(scale),) * 3)
-    child.GetPrim().GetReferences().AddReference(os.path.relpath(base, path.parent).replace(os.sep, "/"), "/Object")
+    child.GetPrim().GetReferences().AddReference(os.path.relpath(base, path.parent).replace(os.sep, "/"), f"/{root_name}")
     stage.GetRootLayer().Save()
     return path
 
@@ -286,6 +290,16 @@ def make_scene(clip: Path, result, light_root: Path, output: Path, frames: int, 
         raise ValueError(f"Invalid light object arrays: {clip}")
     if not np.isfinite(positions).all():
         raise ValueError(f"Nonfinite light object positions: {clip}")
+    entity_types = (np.asarray(result["light_object_entity_types"], dtype=str)
+                    if "light_object_entity_types" in result else np.full(count, "object", dtype=str))
+    labels = (np.asarray(result["light_object_semantic_labels"], dtype=str)
+              if "light_object_semantic_labels" in result else np.asarray([name.removesuffix("_bottom") for name in names], dtype=str))
+    mobilities = (np.asarray(result["light_object_mobilities"], dtype=str)
+                  if "light_object_mobilities" in result else np.full(count, "dynamic", dtype=str))
+    if (entity_types.shape != (count,) or labels.shape != (count,) or mobilities.shape != (count,)
+            or any(kind not in {"object", "terrain"} for kind in entity_types)
+            or any(value not in {"static", "dynamic"} for value in mobilities)):
+        raise ValueError(f"Invalid light scene entity metadata: {clip}")
     entities = []
     used_ids = set()
     for index, name in enumerate(names):
@@ -294,14 +308,24 @@ def make_scene(clip: Path, result, light_root: Path, output: Path, frames: int, 
             raise ValueError(f"Duplicate or empty scene entity ID: {name!r} in {clip}")
         used_ids.add(name)
         xml_path = resolve_ref(clip, light_root, str(refs[index]))
-        base = write_base_object(xml_path, light_root, output)
-        asset = write_scaled_object(base, float(scales[index]), output)
+        entity_type = str(entity_types[index])
+        base = write_base_object(xml_path, light_root, output, entity_type)
+        asset = write_scaled_object(base, float(scales[index]), output, entity_type)
         rotation, _ = quaternion_track(rotations[:, index])
+        static = bool(np.allclose(positions[:, index], positions[0, index], atol=1e-5)
+                      and np.allclose(rotation, rotation[0], atol=1e-5))
+        mobility = str(mobilities[index])
+        if mobility == "static" and not static:
+            raise ValueError(f"Moving light entity marked static: {clip}")
+        if entity_type == "terrain" and (not static or mobility != "static"):
+            raise ValueError(f"Moving light terrain mesh: {clip}")
+        root_name = "Terrain" if entity_type == "terrain" else "Object"
         entities.append({
-            "entity_id": name, "entity_type": "object",
-            "usd_asset": asset.relative_to(output).as_posix(), "usd_prim_path": "/Object",
+            "entity_id": name, "entity_type": entity_type,
+            "usd_asset": asset.relative_to(output).as_posix(), "usd_prim_path": f"/{root_name}",
             "pose_pos": positions[:, index].copy(), "pose_rot": rotation,
-            "mobility": "dynamic", "semantic_label": name.removesuffix("_bottom"),
+            "mobility": mobility,
+            "semantic_label": str(labels[index]),
         })
     if "light_scene_ref" in result:
         scene_path = resolve_ref(clip, light_root, str(scalar(result, "light_scene_ref")))
