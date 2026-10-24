@@ -61,6 +61,12 @@ the canonical output directory. Use a separate output directory per dataset.
   source-specific `smpl_scale`, source paths, or original trajectory files.
 - `light_scene_ref`, when present, points to a version 1 scene JSON with
   `static_entities`. This implementation supports `terrain` `plane` entries.
+- Optional `light_object_entity_types`, `light_object_semantic_labels`, and
+  `light_object_mobilities` arrays annotate the five standard object arrays.
+  GRAIL uses `terrain` for static
+  collision meshes such as slopes; the expander writes these as terrain USD
+  with separate visual and convex collision meshes. Without these arrays,
+  entries remain ordinary objects with their original names.
 
 An object base USD contains shared visual and collision geometry. Each distinct
 object scale gets a small instance USD with a relative reference to that base
@@ -71,5 +77,5 @@ units, object tracks, and terrain to this light contract before expansion.
 
 Other scene primitives or geometry encodings require an explicit light schema
 extension and corresponding expander support. The current implementation is
-verified against OMOMO, HiPHI, and object-free AMASS, Bones Seed, LAFAN1, and
-PICO light form.
+verified against OMOMO, HiPHI, GRAIL, and object-free AMASS, Bones Seed,
+LAFAN1, and PICO light form.

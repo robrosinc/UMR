@@ -17,6 +17,9 @@ also place the upstream `SMPLX_NEUTRAL.pkl` at `smpl/SMPLX_NEUTRAL.pkl`.
 The `g1_smplx_model/` directory describes the source motion's human surface;
 it is used even when the target robot is Igris C. The target robot comes from
 the selected robot config's `robot.xml`.
+The G1-SMPL-X overlay already has the body scale used by these motions.
+Retargeting therefore ignores `human_data.scale`; applying it again can lift
+the feet off the ground in the numbered stair sequences.
 
 ## UMR layout
 

@@ -79,6 +79,10 @@ conversion and the required SMPL-X model/shape options.
 ### GRAIL
 `bash scripts/humanoid_retarget_pipeline_hsi_hoi_batch_grail_igris_c.sh`
 
+The default input is `sample_data/grail` and the default retarget
+output is `output/igris_c_grail`. Use `--plan` first to list sequences without
+training. A subset can be passed as the first positional argument.
+
 ### AMASS (SMPL-X → IGRIS-C)
 `bash scripts/humanoid_retarget_pipeline_batch_amass_igris_c.sh`
 
@@ -107,6 +111,13 @@ feet are not directly snapped to the ground.
 
 ### HiPHI
 `bash scripts/convert_hiphi_umr_to_light.sh` (UMR → light form)
+
+### GRAIL
+`bash scripts/convert_grail_umr_to_light.sh` (UMR → light form)
+
+The GRAIL converter reads prepared `object_mjcf/` assets under
+`sample_data/grail` by default. Set `SAMPLE_ROOT` to the matching
+GRAIL dataset root if the retargeted clips came from another location.
 
 ### LAFAN1
 `bash scripts/convert_lafan1_umr_to_light.sh` (UMR → light form)

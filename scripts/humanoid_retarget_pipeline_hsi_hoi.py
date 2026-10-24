@@ -328,8 +328,11 @@ def load_samp_motion(seq_dir: Path) -> dict[str, Any]:
             "model_type": model_type,
             "fps": float(human.get("mocap_frame_rate", 30.0)),
             "output_up": "z",
-            "human_scale": float(np.asarray(human.get("scale", 1.0), dtype=np.float32).reshape(-1)[0]),
-            "human_scale_mode": "local",
+            # The GRAIL G1-SMPL-X overlay already has the source body scale.
+            # Applying human_data.scale again lifts the feet in sequences where
+            # that upstream field is 0.763..., then inflates smpl_scale too.
+            "human_scale": 1.0,
+            "human_scale_mode": "off",
         }
     packed_motion_path = seq_dir / "motion_actor_smplx.npz"
     if packed_motion_path.is_file() and not (seq_dir / "poses.npy").exists() and not (seq_dir / "smpl_pose_axis_angle.npy").exists():
