@@ -20,7 +20,6 @@ MUJOCO_LOG.TXT
 # Local/editor artifacts
 .DS_Store
 .idea/
-.vscode/
 *.orig
 *.swp
 node_modules/
@@ -30,6 +29,7 @@ smpl/*.pkl
 smpl/*.npz
 smpl/*.zip
 external_assets/hiphi/SMPLX_NEUTRAL.npz
+temp_auto_push.bat
 external_assets/hiphi/beta_fit/*.h5
 external_assets/hiphi/beta_fit/*.pkl
 
@@ -61,3 +61,5 @@ sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/*
 !sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/metadata.json
 !sample_data/hiphi/data/Getting_up/get_up/Getting_up-get_up_0004/motion_actor_smplx.npz
 sample_data/hiphi/object_meshes/
+.gitignore
+branch_structure.json
