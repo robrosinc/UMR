@@ -77,30 +77,76 @@ def local_file(directory: Path, reference: str) -> Path:
     return source
 
 
-def copy_obj_dependencies(source: Path, target: Path, directory: Path, metadata: dict) -> None:
-    """Keep OBJ/MTL/texture references local, including older absolute map_Kd paths."""
-    lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
-    for line in lines:
-        if not line.startswith("mtllib "):
-            continue
-        mtl_ref = line.removeprefix("mtllib ").strip()
-        mtl = local_file(directory, mtl_ref)
-        mtl_target = target.parent / mtl_ref
-        mtl_target.parent.mkdir(parents=True, exist_ok=True)
-        mtl_lines = []
-        for mtl_line in mtl.read_text(encoding="utf-8", errors="replace").splitlines():
-            if mtl_line.startswith("map_Kd "):
-                raw = mtl_line.removeprefix("map_Kd ").strip()
-                texture_name = str(metadata.get("texture") or Path(raw).name)
-                texture = local_file(directory, texture_name)
-                texture_target = mtl_target.parent / texture.name
-                shutil.copy2(texture, texture_target)
-                mtl_line = f"map_Kd {texture.name}"
-            mtl_lines.append(mtl_line)
-        mtl_target.write_text("\n".join(mtl_lines) + "\n", encoding="utf-8")
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
-def install_object(subset: str, key: str, directory: Path, output: Path,
+def obj_dependencies(source: Path, directory: Path, metadata: dict
+                     ) -> tuple[list[tuple[Path, Path]], list[tuple[Path, bytes]]]:
+    """Resolve OBJ dependencies, including older absolute map_Kd paths."""
+    textures: list[tuple[Path, Path]] = []
+    materials: list[tuple[Path, bytes]] = []
+    with source.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith(("v ", "vt ", "f ")):
+                break
+            if not line.startswith("mtllib "):
+                continue
+            mtl_ref = line.removeprefix("mtllib ").strip()
+            mtl = local_file(directory, mtl_ref)
+            mtl_lines = []
+            for mtl_line in mtl.read_text(encoding="utf-8", errors="replace").splitlines():
+                if mtl_line.startswith("map_Kd "):
+                    raw = mtl_line.removeprefix("map_Kd ").strip()
+                    texture_name = str(metadata.get("texture") or Path(raw).name)
+                    texture = local_file(directory, texture_name)
+                    textures.append((texture, Path(mtl_ref).parent / texture.name))
+                    mtl_line = f"map_Kd {texture.name}"
+                mtl_lines.append(mtl_line)
+            materials.append((Path(mtl_ref), ("\n".join(mtl_lines) + "\n").encode("utf-8")))
+    return textures, materials
+
+
+def install_mesh(source: Path, directory: Path, metadata: dict, output: Path) -> Path:
+    """Store identical mesh assets once while keeping OBJ materials self-contained."""
+    mesh_root = output / "assets/objects/meshes"
+    source_hash = file_digest(source)
+    if source.name != "grail_object.obj":
+        target = mesh_root / "collision" / f"{source_hash}.obj"
+        if not target.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        return target
+
+    textures, materials = obj_dependencies(source, directory, metadata)
+    digest = hashlib.sha256()
+    digest.update(source_hash.encode("ascii"))
+    for texture, relative in textures:
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(file_digest(texture).encode("ascii"))
+    for relative, payload in materials:
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(payload)
+    target = mesh_root / "visual" / digest.hexdigest() / source.name
+    if not target.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        for texture, relative in textures:
+            dependency = target.parent / relative
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(texture, dependency)
+        for relative, payload in materials:
+            dependency = target.parent / relative
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            dependency.write_bytes(payload)
+    return target
+
+
+def install_object(directory: Path, output: Path,
                    cache: dict[Path, tuple[Path, float]]) -> tuple[Path, float]:
     xml_path = directory / "grail_object.xml"
     if xml_path in cache:
@@ -115,7 +161,6 @@ def install_object(subset: str, key: str, directory: Path, output: Path,
         raise ValueError(f"External object meshdir: {xml_path}")
     if compiler is not None:
         compiler.attrib.pop("meshdir", None)
-    mesh_dir = output / "assets/objects/meshes" / subset / safe_name(key)
     scales = []
     for mesh in root.findall("./asset/mesh"):
         source = local_file(directory, str(Path(meshdir) / mesh.get("file", "")))
@@ -123,12 +168,8 @@ def install_object(subset: str, key: str, directory: Path, output: Path,
         if scale.shape != (3,) or not np.isfinite(scale).all() or scale[0] <= 0 or not np.allclose(scale, scale[0]):
             raise ValueError(f"Nonuniform or invalid GRAIL mesh scale: {xml_path}")
         scales.append(float(scale[0]))
-        target = mesh_dir / source.name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        if source.suffix.lower() == ".obj":
-            copy_obj_dependencies(source, target, directory, metadata)
-        mesh.set("file", f"../meshes/{subset}/{safe_name(key)}/{source.name}")
+        target = install_mesh(source, directory, metadata, output)
+        mesh.set("file", f"../meshes/{target.relative_to(output / 'assets/objects/meshes').as_posix()}")
         mesh.set("scale", "1 1 1")
     if not scales or not np.allclose(scales, scales[0]):
         raise ValueError(f"GRAIL object meshes must share one scale: {xml_path}")
@@ -140,7 +181,8 @@ def install_object(subset: str, key: str, directory: Path, output: Path,
     digest = hashlib.sha256(payload).hexdigest()[:24]
     template = output / "assets/objects/templates" / f"grail_{digest}.xml"
     template.parent.mkdir(parents=True, exist_ok=True)
-    template.write_bytes(payload)
+    if not template.is_file():
+        template.write_bytes(payload)
     cache[xml_path] = (template, scales[0])
     return cache[xml_path]
 
@@ -182,7 +224,7 @@ def convert_clip(source: Path, args: argparse.Namespace, robot: Path, scene: Pat
                 or not np.isfinite(qpos).all() or not np.isfinite(fps) or fps <= 0 or not np.isfinite(scale) or scale <= 0):
             raise ValueError(f"Invalid GRAIL retarget motion: {source}")
         subset, key, directory = source_assets(data, args.sample_root)
-        template, mesh_scale = install_object(subset, key, directory, args.output_dir, cache)
+        template, mesh_scale = install_object(directory, args.output_dir, cache)
         pos, rot = object_pose(directory / "prop_grail_object.csv", frames, data)
         is_terrain = key.startswith("terrain_")
         aligned_rot = rot.copy()
@@ -218,6 +260,19 @@ def convert_clip(source: Path, args: argparse.Namespace, robot: Path, scene: Pat
     return "terrain" if is_terrain else "object"
 
 
+def remove_legacy_assets(output: Path, cache: dict[Path, tuple[Path, float]]) -> None:
+    """Drop sequence-local assets left by an earlier conversion after all clips succeed."""
+    mesh_root = output / "assets/objects/meshes"
+    for subset in {xml_path.parents[2].name for xml_path in cache}:
+        legacy = mesh_root / subset
+        if legacy.is_dir():
+            shutil.rmtree(legacy)
+    active_templates = {template for template, _scale in cache.values()}
+    for template in (output / "assets/objects/templates").glob("grail_*.xml"):
+        if template not in active_templates:
+            template.unlink()
+
+
 def main() -> None:
     args = parse_args()
     sources = sorted(args.input_dir.rglob("*.npz"))
@@ -238,10 +293,12 @@ def main() -> None:
         counts[convert_clip(source, args, robot, scene, cache)] += 1
         if index % 100 == 0 or index == len(sources):
             print(f"[{index}/{len(sources)}] GRAIL clips, {counts['terrain']} terrain, {counts['object']} objects", flush=True)
+    remove_legacy_assets(args.output_dir, cache)
     manifest = {
         "format": "umr_light", "version": 1, "source": "grail",
         "clip_count": len(sources), "object_instances": len(sources),
-        "terrain_instances": counts["terrain"], "object_templates": len(cache),
+        "terrain_instances": counts["terrain"],
+        "object_templates": len({template for template, _scale in cache.values()}),
         "clip_paths_are_relative_to_npz": True,
         "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
     }
