@@ -91,8 +91,7 @@ keybody_pos[t, i]       = keybody_pos_world[t, i]
 
 현재 권장 변환 경로는 소스별 UMR→light packaging 후 공통
 `scripts/expand_light_to_canonical.py` 실행이다. 배포 및 단독 실행 방법은
-[Light form → canonical](LIGHT_TO_CANONICAL.md)에 있다. 기존 소스별 UMR→canonical
-직접 변환 스크립트는 deprecated이며 과거 결과 재현용으로 남겨 둔다.
+[Light form → canonical](LIGHT_TO_CANONICAL.md)에 있다.
 
 학습 데이터에서 object와 terrain은 동일한 **scene entity track** 형식을 쓴다. 각 entity는 고정된 로컬 좌표계의 USD 형상과 시간에 따른 월드 pose를 가진다. Object는 이동·회전할 수 있고, terrain은 보통 고정되어 있지만 움직이는 플랫폼도 같은 형식으로 표현한다. 이 pose track은 강체 이동만 나타내므로 프레임마다 형상이 변하는 변형체는 별도 geometry animation 규격이 필요하다.
 

@@ -52,4 +52,3 @@ The expander uses `light_object_scales` exactly once. It writes shared USD
 geometry plus small per-scale USD references, so object vertices and collision
 meshes have the right effective size without copying the source OBJ per clip.
 Object positions already include the retarget scale and are not scaled again.
-The source-specific direct UMR-to-canonical scripts are deprecated.

@@ -137,8 +137,7 @@ Clip IDs include the take name (for example, `take_1__pico_0000`) so the
 common canonical expander can write unique flat `motion/*.pkl` filenames.
 The LAN viewer lists the generated `light_form/igris_c_pico` folder.
 
-All sources: `bash scripts/expand_light_to_canonical.sh` (light form → canonical;
-기존 직접 변환 스크립트는 deprecated)
+All sources: `bash scripts/expand_light_to_canonical.sh` (light form → canonical)
 
 NAS 배포에는 각 `light_form/<dataset>/` 디렉터리 전체를 사용한다. 사용자는
 UMR 전체를 설치할 필요 없이 공통 expand 스크립트와 최소 의존성만으로
