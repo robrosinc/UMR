@@ -17,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from quaternion_layout import xyzw_to_wxyz
+
 from viser_mujoco_viewer import (
     CAMERA_ACTIVE_COLOR,
     SNAPSHOT_HEIGHT,
@@ -574,7 +576,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                         handle.wxyz = _mat_to_wxyz(data.xmat[body_id])
                     for entity, handle in active["entity_handles"]:
                         handle.position = entity["pose_pos"][frame]
-                        handle.wxyz = entity["pose_rot"][frame]
+                        handle.wxyz = xyzw_to_wxyz(entity["pose_rot"][frame])
                     for body_id, handle in zip(active["com_body_ids"], active["com_handles"]):
                         handle.position = _projected_robot_com(data, body_id)
                     source_overlay = descriptor.get("source_overlay")
@@ -631,7 +633,7 @@ def run_viser_result_folder(*, args, result_dir: Path, load_clip, title: str,
                     entity_path,
                     show_axes=False,
                     position=entity["pose_pos"][0],
-                    wxyz=entity["pose_rot"][0],
+                    wxyz=xyzw_to_wxyz(entity["pose_rot"][0]),
                 )
                 terrain = entity["entity_type"] == "terrain"
                 for mesh_index, (vertices, faces) in enumerate(entity["meshes"]):

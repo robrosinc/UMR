@@ -17,6 +17,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from light_form_io import write_light_clip_from_wxyz
+
 from convert_amass_umr_to_light import install_model, relative_to_clip, scalar
 
 
@@ -101,11 +103,7 @@ def convert_clip(source: Path, input_dir: Path, output: Path, robot: Path, scene
             "robot_xml": np.asarray(relative_to_clip(clip, robot)),
             "light_scene_ref": np.asarray(relative_to_clip(clip, scene)),
         })
-    clip.parent.mkdir(parents=True, exist_ok=True)
-    temporary = clip.with_suffix(".npz.tmp")
-    with temporary.open("wb") as handle:
-        np.savez_compressed(handle, **payload)
-    temporary.replace(clip)
+    write_light_clip_from_wxyz(clip, payload)
 
 
 def main() -> None:
@@ -135,7 +133,7 @@ def main() -> None:
         "shared_robot_meshes": len(mesh_cache),
         "verified_generated_xmls": available_xmls,
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (args.output_dir / "format.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Light form ready: {args.output_dir}")

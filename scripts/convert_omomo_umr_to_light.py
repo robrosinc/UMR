@@ -19,6 +19,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from light_form_io import write_light_clip_from_wxyz, write_light_scene_from_mujoco
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,22 +75,7 @@ def install_robot(robot_xml: Path, output: Path) -> Path:
 
 def install_scene(robot_xml: Path, output: Path) -> Path:
     root = ET.parse(robot_xml).getroot()
-    entities = []
-    for index, geom in enumerate(root.findall("./worldbody/geom")):
-        if geom.get("type") != "plane":
-            continue
-        entities.append({
-            "entity_id": geom.get("name", f"plane_{index}"),
-            "entity_type": "terrain",
-            "primitive": "plane",
-            "size": [float(value) for value in geom.get("size", "1 1 0.05").split()],
-            "pos": [float(value) for value in geom.get("pos", "0 0 0").split()],
-            "rot_wxyz": [float(value) for value in geom.get("quat", "1 0 0 0").split()],
-        })
-    scene = output / "scenes/plane.json"
-    scene.parent.mkdir(parents=True, exist_ok=True)
-    scene.write_text(json.dumps({"version": 1, "static_entities": entities}, indent=2) + "\n")
-    return scene
+    return write_light_scene_from_mujoco(root, output / "scenes", filename="plane.json")
 
 
 def install_object_template(xml_path: Path, sample_root: Path, output: Path,
@@ -198,11 +185,7 @@ def convert_clip(source: Path, input_dir: Path, output: Path, sample_root: Path,
             "light_object_pos": np.stack(positions, axis=1),
             "light_object_rot": np.stack(rotations, axis=1),
         })
-    clip.parent.mkdir(parents=True, exist_ok=True)
-    temporary = clip.with_suffix(".npz.tmp")
-    with temporary.open("wb") as handle:
-        np.savez_compressed(handle, **payload)
-    temporary.replace(clip)
+    write_light_clip_from_wxyz(clip, payload)
     return len(names)
 
 
@@ -242,7 +225,7 @@ def main() -> None:
         "clip_count": len(sources), "object_instances": objects,
         "object_templates": len(templates), "shared_meshes": len(copied_meshes),
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (output / "format.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Light form ready: {output}")

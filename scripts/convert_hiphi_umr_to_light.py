@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from light_form_io import write_light_clip_from_wxyz
+
 from convert_omomo_umr_to_light import install_robot, install_scene, relative_to_clip, scalar
 from hiphi_layout import resolve_hiphi_objects
 
@@ -192,11 +194,7 @@ def convert_clip(source: Path, args, robot: Path, scene: Path,
             "light_object_pos": np.stack(positions, axis=1) if positions else np.empty((len(qpos), 0, 3), dtype=np.float32),
             "light_object_rot": np.stack(rotations, axis=1) if rotations else np.empty((len(qpos), 0, 4), dtype=np.float32),
         })
-    clip.parent.mkdir(parents=True, exist_ok=True)
-    temporary = clip.with_suffix(".npz.tmp")
-    with temporary.open("wb") as handle:
-        np.savez_compressed(handle, **payload)
-    temporary.replace(clip)
+    write_light_clip_from_wxyz(clip, payload)
     return len(entries), fallbacks, clamped_tracks
 
 
@@ -233,7 +231,7 @@ def main() -> None:
         "fallback_collision": "original visual OBJ used as convex hull source when prepared MJCF is absent",
         "fallback_freejoints_named": True,
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (args.output_dir / "format.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Light form ready: {args.output_dir}")

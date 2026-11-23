@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from light_form_io import write_light_clip_from_wxyz, write_light_scene_from_mujoco
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,26 +97,7 @@ def install_model(source_xml: Path, output: Path, mesh_cache: dict[Path, Path]) 
     if not model.is_file():
         model.write_bytes(payload)
 
-    entities = []
-    for index, geom in enumerate(root.findall("./worldbody/geom")):
-        if geom.get("type") != "plane":
-            continue
-        entities.append({
-            "entity_id": geom.get("name", f"plane_{index}"),
-            "entity_type": "terrain", "primitive": "plane",
-            "size": [float(value) for value in geom.get("size", "1 1 0.05").split()],
-            "pos": [float(value) for value in geom.get("pos", "0 0 0").split()],
-            "rot_wxyz": [float(value) for value in geom.get("quat", "1 0 0 0").split()],
-        })
-    scene_data = {"version": 1, "static_entities": entities}
-    scene_payload = json.dumps(scene_data, indent=2, ensure_ascii=False) + "\n"
-    scene_hash = hashlib.sha256(scene_payload.encode()).hexdigest()[:24]
-    scene = output / "scenes" / f"scene_{scene_hash}.json"
-    scene.parent.mkdir(parents=True, exist_ok=True)
-    if scene.is_file() and scene.read_text() != scene_payload:
-        raise ValueError(f"Scene hash collision: {scene}")
-    if not scene.is_file():
-        scene.write_text(scene_payload)
+    scene = write_light_scene_from_mujoco(root, output / "scenes")
     return model, scene
 
 
@@ -145,11 +128,7 @@ def convert_clip(source: Path, input_dir: Path, output: Path,
             "robot_xml": np.asarray(relative_to_clip(clip, model)),
             "light_scene_ref": np.asarray(relative_to_clip(clip, scene)),
         })
-    clip.parent.mkdir(parents=True, exist_ok=True)
-    temporary = clip.with_suffix(".npz.tmp")
-    with temporary.open("wb") as handle:
-        np.savez_compressed(handle, **payload)
-    temporary.replace(clip)
+    write_light_clip_from_wxyz(clip, payload)
 
 
 def main() -> None:
@@ -178,7 +157,7 @@ def main() -> None:
         "clip_count": len(sources), "robot_models": len(model_cache),
         "shared_robot_meshes": len(mesh_cache),
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (args.output_dir / "format.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Light form ready: {args.output_dir}")

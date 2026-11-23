@@ -3,7 +3,8 @@
 
 Only light-form fields are read. Source dataset names and source paths have no
 meaning here. Object geometry is shared; a small USD instance applies each
-clip's final mesh scale to both visual and collision geometry.
+clip's final mesh scale to both visual and collision geometry. All stored
+rotations (including qpos[:, 3:7]) are xyzw. MuJoCo assets remain native wxyz.
 """
 
 from __future__ import annotations
@@ -77,9 +78,12 @@ def resolve_ref(clip: Path, root: Path, ref: str) -> Path:
 
 
 def quaternion_track(quats: np.ndarray) -> tuple[np.ndarray, Rotation]:
-    quats = np.asarray(quats, dtype=np.float64).copy()
+    # Normalize in native wxyz order to preserve the previous floating-point
+    # reduction and sign-continuity results exactly when migrating old data.
+    quats = np.asarray(quats, dtype=np.float64)
     if quats.ndim != 2 or quats.shape[1] != 4 or not np.isfinite(quats).all():
-        raise ValueError("Expected finite wxyz quaternions of shape (T, 4)")
+        raise ValueError("Expected finite xyzw quaternions of shape (T, 4)")
+    quats = quats[:, [3, 0, 1, 2]].copy()
     norms = np.linalg.norm(quats, axis=1)
     if np.any(norms < 1e-8):
         raise ValueError("Zero quaternion in pose track")
@@ -87,7 +91,8 @@ def quaternion_track(quats: np.ndarray) -> tuple[np.ndarray, Rotation]:
     for index in range(1, len(quats)):
         if np.dot(quats[index - 1], quats[index]) < 0:
             quats[index] *= -1
-    return quats.astype(np.float32), Rotation.from_quat(quats[:, [1, 2, 3, 0]])
+    xyzw = quats[:, [1, 2, 3, 0]]
+    return xyzw.astype(np.float32), Rotation.from_quat(xyzw)
 
 
 def derivative(values: np.ndarray, fps: float) -> np.ndarray:
@@ -132,22 +137,24 @@ def make_motion(model: mujoco.MjModel, qpos: np.ndarray, fps: float, joint_names
     data = mujoco.MjData(model)
     world_pos = np.empty((count, len(ids), 3), dtype=np.float32)
     world_rot = np.empty((count, len(ids), 4), dtype=np.float32)
-    for index, pose in enumerate(qpos):
+    mujoco_qpos = qpos.copy()
+    mujoco_qpos[:, 3:7] = qpos[:, [6, 3, 4, 5]]
+    for index, pose in enumerate(mujoco_qpos):
         data.qpos[:] = pose
         mujoco.mj_forward(model, data)
         world_pos[index] = data.xpos[ids]
         world_rot[index] = data.xquat[ids]
-    root_repeated = Rotation.from_quat(np.repeat(root_rot[:, [1, 2, 3, 0]], len(ids), axis=0))
+    root_repeated = Rotation.from_quat(np.repeat(root_rot, len(ids), axis=0))
     local_pos = root_repeated.inv().apply((world_pos - root_pos[:, None, :]).reshape(-1, 3))
     local_pos = local_pos.reshape(count, len(ids), 3).astype(np.float32)
     body_rotation = Rotation.from_quat(world_rot.reshape(-1, 4)[:, [1, 2, 3, 0]])
     relative = (root_repeated.inv() * body_rotation).as_quat().reshape(count, len(ids), 4)
-    local_rot = relative[..., [3, 0, 1, 2]].astype(np.float32)
+    local_rot = relative.astype(np.float32)
     return {
         "fps": float(fps), "root_pos": root_pos, "root_rot": root_rot,
         "root_vel": derivative(root_pos, fps), "root_angvel": angular_velocity(root_rotation, fps),
         "dof_pos": dof_pos, "dof_vel": derivative(dof_pos, fps),
-        "keybody_pos_world": world_pos, "keybody_rot_world": world_rot,
+        "keybody_pos_world": world_pos, "keybody_rot_world": world_rot[..., [1, 2, 3, 0]],
         "keybody_pos_local": local_pos, "keybody_rot_local": local_rot,
         "keybody_pos": world_pos.copy(), "link_body_list": list(KEYBODIES),
         "local_body_link_body_list": None, "local_body_pos": None,
@@ -344,7 +351,7 @@ def make_scene(clip: Path, result, light_root: Path, output: Path, frames: int, 
             raise ValueError(f"Unsupported light scene entity in {scene_path}: {item}")
         asset = write_plane(item["size"], output)
         pos = np.asarray(item.get("pos", [0, 0, 0]), dtype=np.float32)
-        rot = np.asarray(item.get("rot_wxyz", [1, 0, 0, 0]), dtype=np.float32)
+        rot = np.asarray(item.get("rot_xyzw", [0, 0, 0, 1]), dtype=np.float32)
         if pos.shape != (3,) or not np.isfinite(pos).all():
             raise ValueError(f"Invalid static terrain position in {scene_path}")
         rot, _ = quaternion_track(rot[None, :])

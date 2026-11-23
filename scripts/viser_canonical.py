@@ -9,6 +9,8 @@ import mujoco
 import numpy as np
 from pxr import Gf, Usd, UsdGeom
 
+from quaternion_layout import xyzw_to_wxyz
+
 
 def scan_canonical_motion_files(root: Path) -> list[Path]:
     """Keep scene PKLs out of the clip dropdown."""
@@ -38,7 +40,7 @@ def load_motion(path: Path) -> tuple[dict, np.ndarray, mujoco.MjModel]:
     count = len(positions)
     if rotations.shape != (count, 4) or joints.shape != (count, model.nq - 7):
         raise ValueError(f"Canonical pose arrays do not match the robot model: {path}")
-    qpos = np.concatenate((positions, rotations, joints), axis=1)
+    qpos = np.concatenate((positions, xyzw_to_wxyz(rotations), joints), axis=1)
     if count == 0 or not np.isfinite(qpos).all():
         raise ValueError(f"Canonical motion is empty or contains nonfinite poses: {path}")
     fps = float(motion["fps"])

@@ -61,7 +61,7 @@ def main() -> None:
         "clip_count": len(sources), "robot_models": len(model_cache),
         "shared_robot_meshes": len(mesh_cache),
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (args.output_dir / "format.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Light form ready: {args.output_dir}")

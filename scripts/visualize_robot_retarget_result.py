@@ -22,6 +22,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from hiphi_layout import resolve_hiphi_objects
+from quaternion_layout import qpos_xyzw_to_wxyz, xyzw_to_wxyz
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -1026,7 +1027,7 @@ def prepare_source_objects(args, result, playback_frame_ids: np.ndarray, temp_di
         xml_refs = np.asarray(result["light_object_xml_refs"], dtype=str)
         light_scales = np.asarray(result["light_object_scales"], dtype=np.float32)
         light_pos = np.asarray(result["light_object_pos"], dtype=np.float32)
-        light_rot = np.asarray(result["light_object_rot"], dtype=np.float32)
+        light_rot = xyzw_to_wxyz(np.asarray(result["light_object_rot"], dtype=np.float32))
         total_frames = len(result["qpos"])
         count = len(names)
         if (xml_refs.shape != (count,) or light_scales.shape != (count,)
@@ -1324,6 +1325,10 @@ def load_result(path: Path):
     qpos = np.asarray(result["qpos"], dtype=np.float64)
     if qpos.ndim != 2:
         raise ValueError(f"qpos must be 2D, got shape {qpos.shape}")
+
+    # Only portable light clips store xyzw; raw UMR results remain native wxyz.
+    if "light_form_version" in result:
+        qpos = qpos_xyzw_to_wxyz(qpos)
 
     robot_xml = infer_default_robot_xml(path)
     if "robot_xml" in result:

@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from light_form_io import write_light_clip_from_wxyz
+
 from convert_omomo_umr_to_light import install_robot, install_scene, relative_to_clip, scalar
 
 
@@ -252,11 +254,7 @@ def convert_clip(source: Path, args: argparse.Namespace, robot: Path, scene: Pat
             "light_object_semantic_labels": np.asarray([label], dtype=str),
             "light_object_mobilities": np.asarray(["static" if is_static else "dynamic"], dtype=str),
         })
-    clip.parent.mkdir(parents=True, exist_ok=True)
-    temporary = clip.with_suffix(".npz.tmp")
-    with temporary.open("wb") as handle:
-        np.savez_compressed(handle, **payload)
-    temporary.replace(clip)
+    write_light_clip_from_wxyz(clip, payload)
     return "terrain" if is_terrain else "object"
 
 
@@ -300,7 +298,7 @@ def main() -> None:
         "terrain_instances": counts["terrain"],
         "object_templates": len({template for template, _scale in cache.values()}),
         "clip_paths_are_relative_to_npz": True,
-        "units": "meters", "up_axis": "Z", "quaternion_order": "wxyz",
+        "units": "meters", "up_axis": "Z", "quaternion_order": "xyzw",
     }
     (args.output_dir / "format.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Light form ready: {args.output_dir}")
